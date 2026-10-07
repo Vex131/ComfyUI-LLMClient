@@ -21,16 +21,25 @@ Points at an OpenAI-compatible API root (e.g. `http://127.0.0.1:8080/v1`;
 (`auto` detects llama.cpp / vLLM / generic), and a model combo.
 Use the **Test Connection** / **Refresh Models** buttons on the node to
 probe the server and populate the model list. Detected profiles, models,
-and vision capability are cached in `providers.json` next to `config.py`.
+context size, and vision capability are cached in `providers.json` next
+to `config.py`. Outputs the `model` handle for the other nodes plus an
+`info` string (profile, context, unload support, per-model vision flags)
+you can connect to a **Preview as Text** node. The cache is also filled
+automatically on first execution.
+
+### LLM Model Config
+Optional sampling presets for LLM Chat: `temperature`, `top_p`, `top_k`,
+`max_tokens`, `reasoning_effort` (all `-1`/`default` = provider default).
+Leave the `config` input of LLM Chat unconnected to use provider defaults.
 
 ### LLM Chat
 Sends system prompt + user prompt (optionally with an IMAGE input) through
-the provider handle and streams the response. Outputs `text` and
+the provider handle and streams the response. Outputs `output` and
 `reasoning` (from `delta.reasoning_content` / `delta.reasoning`).
-Advanced widgets: `temperature`, `top_p`, `top_k`, `max_tokens`,
-`reasoning_effort`, `seed` (all `-1`/`default` = provider default), and a
-`vision` override (`auto`/`yes`/`no`). With `auto`, a model detected as
-non-multimodal rejects image input; force `yes` to send images anyway.
+Optional `model_config` input from the LLM Model Config node. Advanced
+`vision` override (`auto`/`yes`/`no`) and `seed`. With `auto`, a model
+detected as non-multimodal rejects image input; force `yes` to send
+images anyway.
 
 ### LLM Unload
 Asks the server to release model memory. Modes: `offload_vram_to_ram`,
@@ -57,7 +66,7 @@ JSON**. Anyone you share the workflow with can read it.
 
 1. `LLM Provider`: base_url `http://127.0.0.1:8080/v1`, profile `auto`,
    click **Test Connection**, pick a model from the combo.
-2. `Load Image` → `LLM Chat`: connect the provider handle and the image,
-   write a prompt like "Describe this image", read the `text` output.
+2. `Load Image` → `LLM Chat`: connect the `model` handle and the image,
+   write a prompt like "Describe this image", read the `output` text.
 3. When done, `LLM Unload` with mode `offload_vram_to_ram` to free VRAM
    (vLLM/llama.cpp router only).

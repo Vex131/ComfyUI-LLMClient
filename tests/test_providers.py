@@ -162,6 +162,31 @@ class UnloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("does not expose an unload API", str(ctx.exception))
 
 
+class BuildPayloadTests(unittest.TestCase):
+    MESSAGES = [{"role": "user", "content": "hi"}]
+
+    def test_no_config_provider_defaults(self):
+        payload = client.build_chat_payload("m", self.MESSAGES)
+        self.assertEqual(payload, {"model": "m", "messages": self.MESSAGES})
+
+    def test_config_sentinels_skipped(self):
+        sampling = {"temperature": -1.0, "top_p": -1.0, "top_k": -1, "max_tokens": -1,
+                    "reasoning_effort": "default"}
+        payload = client.build_chat_payload("m", self.MESSAGES, sampling, seed=-1)
+        self.assertEqual(payload, {"model": "m", "messages": self.MESSAGES})
+
+    def test_config_values_and_seed(self):
+        sampling = {"temperature": 0.7, "top_p": 0.9, "top_k": 40, "max_tokens": 512,
+                    "reasoning_effort": "high"}
+        payload = client.build_chat_payload("m", self.MESSAGES, sampling, seed=7)
+        self.assertEqual(payload["temperature"], 0.7)
+        self.assertEqual(payload["top_p"], 0.9)
+        self.assertEqual(payload["top_k"], 40)
+        self.assertEqual(payload["max_tokens"], 512)
+        self.assertEqual(payload["reasoning_effort"], "high")
+        self.assertEqual(payload["seed"], 7)
+
+
 class ConfigTests(unittest.TestCase):
     def test_cache_round_trip(self):
         original = config.CACHE_PATH

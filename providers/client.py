@@ -78,6 +78,24 @@ async def probe(session, base_url: str, api_key: str) -> dict:
     return {"ok": True, "profile": profile, "models": models, "context": context, "error": None}
 
 
+def build_chat_payload(model: str, messages: list, sampling: dict = None, seed: int = -1) -> dict:
+    payload = {"model": model, "messages": messages}
+    if sampling:
+        if sampling["temperature"] >= 0:
+            payload["temperature"] = sampling["temperature"]
+        if sampling["top_p"] >= 0:
+            payload["top_p"] = sampling["top_p"]
+        if sampling["top_k"] >= 0:
+            payload["top_k"] = sampling["top_k"]
+        if sampling["max_tokens"] >= 0:
+            payload["max_tokens"] = sampling["max_tokens"]
+        if sampling["reasoning_effort"] != "default":
+            payload["reasoning_effort"] = sampling["reasoning_effort"]
+    if seed >= 0:
+        payload["seed"] = seed
+    return payload
+
+
 async def chat_stream(session, base_url: str, api_key: str, payload: dict, on_chunk) -> tuple[str, str]:
     root = normalize_root(base_url)
     text = ""

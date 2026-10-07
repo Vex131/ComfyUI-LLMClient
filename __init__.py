@@ -3,6 +3,7 @@ from typing_extensions import override
 from comfy_api.latest import ComfyExtension, io
 
 from .nodes.chat import LLMChat
+from .nodes.config import LLMModelConfig
 from .nodes.provider import LLMProvider
 from .nodes.unload import LLMUnload
 
@@ -18,6 +19,7 @@ class LLMClientExtension(ComfyExtension):
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
         return [
             LLMProvider,
+            LLMModelConfig,
             LLMChat,
             LLMUnload,
         ]
