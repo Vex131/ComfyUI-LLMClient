@@ -1,0 +1,11 @@
+[project]
+name = "comfyui-llmclient"
+description = "OpenAI-compatible LLM client nodes for ComfyUI (any provider: llama.cpp, vLLM, NInfer, Strata, OpenAI)"
+version = "0.1.0"
+license = { text = "MIT" }
+dependencies = []
+
+[tool.comfy]
+PublisherId = "changeme"
+DisplayName = "ComfyUI-LLMClient"
+License = "MIT"
