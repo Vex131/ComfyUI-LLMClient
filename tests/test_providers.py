@@ -8,7 +8,32 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 import config
-from providers import client
+from providers import client, profiles
+
+
+class FormatInfoTests(unittest.TestCase):
+    def test_format_info(self):
+        entry = {
+            "profile": "llamacpp",
+            "context": 8192,
+            "models": [
+                {"id": "vl-model", "vision": True, "reasoning": None},
+                {"id": "text-model", "vision": False, "reasoning": None},
+                {"id": "unknown-model", "vision": None, "reasoning": None},
+            ],
+        }
+        info = profiles.format_info(entry)
+        self.assertIn("Profile: llamacpp", info)
+        self.assertIn("Context: 8192 tokens", info)
+        self.assertIn("Unload: llama.cpp router load/unload", info)
+        self.assertIn("vl-model [vision]", info)
+        self.assertIn("text-model [text-only]", info)
+        self.assertIn("  - unknown-model\n", info + "\n")
+
+    def test_format_info_no_unload(self):
+        info = profiles.format_info({"profile": "openai", "models": [{"id": "gpt", "vision": None}]})
+        self.assertIn("Unload: not supported", info)
+        self.assertNotIn("Context:", info)
 
 
 async def _with_server(app, coro):
@@ -60,6 +85,7 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
         result = await _with_server(llamacpp_app(), run)
         self.assertTrue(result["ok"])
         self.assertEqual(result["profile"], "llamacpp")
+        self.assertEqual(result["context"], 4096)
         by_id = {m["id"]: m for m in result["models"]}
         self.assertIs(by_id["qwen2.5-vl"]["vision"], True)
         self.assertIs(by_id["qwen2.5"]["vision"], False)
@@ -143,12 +169,14 @@ class ConfigTests(unittest.TestCase):
             config.CACHE_PATH = os.path.join(tmp, "providers.json")
             try:
                 self.assertEqual(config.cached_models("http://a/v1"), [])
+                self.assertIsNone(config.cached_entry("http://a/v1"))
                 config.update_cache("http://a/v1", "llamacpp",
-                                    [{"id": "shared", "vision": True, "reasoning": None}])
+                                    [{"id": "shared", "vision": True, "reasoning": None}], context=4096)
                 config.update_cache("http://b/v1", "vllm",
                                     [{"id": "shared", "vision": None, "reasoning": None},
                                      {"id": "other", "vision": None, "reasoning": None}])
                 self.assertEqual(config.cached_models("http://a/v1")[0]["id"], "shared")
+                self.assertEqual(config.cached_entry("http://a/v1")["context"], 4096)
                 self.assertEqual(config.all_cached_model_ids(), ["shared", "other"])
                 with open(config.CACHE_PATH, "w") as f:
                     f.write("{not json")

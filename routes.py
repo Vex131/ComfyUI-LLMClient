@@ -19,5 +19,5 @@ async def test_connection(request: web.Request) -> web.Response:
     if profile != "auto":
         result["profile"] = profile
     if result["ok"]:
-        config.update_cache(base_url, result["profile"], result["models"])
+        config.update_cache(base_url, result["profile"], result["models"], context=result.get("context"))
     return web.json_response(result)

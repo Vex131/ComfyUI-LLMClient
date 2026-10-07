@@ -44,11 +44,11 @@ async def probe(session, base_url: str, api_key: str) -> dict:
     try:
         async with session.get(root + "/models", headers=headers) as resp:
             if resp.status != 200:
-                return {"ok": False, "profile": "generic", "models": [],
+                return {"ok": False, "profile": "generic", "models": [], "context": None,
                         "error": "GET {}/models returned HTTP {}".format(root, resp.status)}
             data = await resp.json()
     except (aiohttp.ClientError, ValueError) as exc:
-        return {"ok": False, "profile": "generic", "models": [], "error": str(exc)}
+        return {"ok": False, "profile": "generic", "models": [], "context": None, "error": str(exc)}
 
     models = []
     entries = data.get("data", []) if isinstance(data, dict) else []
@@ -63,11 +63,19 @@ async def probe(session, base_url: str, api_key: str) -> dict:
         models.append({"id": model_id, "vision": vision, "reasoning": None})
 
     profile = "generic"
+    context = None
     if await _reachable(session, origin + "/props", headers):
         profile = "llamacpp"
+        try:
+            async with session.get(origin + "/props", headers=headers, timeout=aiohttp.ClientTimeout(total=3)) as resp:
+                if resp.status == 200:
+                    props = await resp.json()
+                    context = props.get("total_n_ctx") or props.get("slot_n_ctx")
+        except (aiohttp.ClientError, ValueError):
+            pass
     elif await _reachable(session, origin + "/is_sleeping", headers):
         profile = "vllm"
-    return {"ok": True, "profile": profile, "models": models, "error": None}
+    return {"ok": True, "profile": profile, "models": models, "context": context, "error": None}
 
 
 async def chat_stream(session, base_url: str, api_key: str, payload: dict, on_chunk) -> tuple[str, str]:

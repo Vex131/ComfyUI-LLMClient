@@ -72,7 +72,7 @@ class LLMChat(io.ComfyNode):
                 io.Int.Input("seed", default=-1, min=-1, max=2147483647, control_after_generate=True, advanced=True),
             ],
             outputs=[
-                io.String.Output("text"),
+                io.String.Output("output"),
                 io.String.Output("reasoning"),
             ],
         )

@@ -19,14 +19,19 @@ def save_cache(cache: dict):
         json.dump(cache, f, indent=2)
 
 
-def update_cache(base_url: str, profile: str, models: list):
+def update_cache(base_url: str, profile: str, models: list, context: int = None):
     cache = load_cache()
     cache[base_url] = {
         "profile": profile,
         "detected_at": datetime.now(timezone.utc).isoformat(),
         "models": models,
+        "context": context,
     }
     save_cache(cache)
+
+
+def cached_entry(base_url: str) -> dict:
+    return load_cache().get(base_url)
 
 
 def cached_models(base_url: str) -> list:

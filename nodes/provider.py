@@ -1,6 +1,8 @@
+import aiohttp
 from comfy_api.latest import io
 
 from .. import config
+from ..providers import client, profiles
 
 LLMProviderType = io.Custom("LLM_PROVIDER")
 
@@ -27,7 +29,7 @@ class LLMProvider(io.ComfyNode):
                 ),
                 io.Combo.Input(
                     "profile",
-                    options=["auto", "generic", "llamacpp", "vllm", "ninfer", "strata", "openai"],
+                    options=profiles.PROFILE_OPTIONS,
                     default="auto",
                 ),
                 io.Combo.Input(
@@ -37,9 +39,22 @@ class LLMProvider(io.ComfyNode):
                     tooltip="Use the Test Connection button to refresh.",
                 ),
             ],
-            outputs=[LLMProviderType.Output("provider")],
+            outputs=[
+                LLMProviderType.Output("model"),
+                io.String.Output("info"),
+            ],
         )
 
     @classmethod
-    def execute(cls, base_url, api_key, profile, model) -> io.NodeOutput:
-        return io.NodeOutput({"base_url": base_url, "api_key": api_key, "profile": profile, "model": model})
+    async def execute(cls, base_url, api_key, profile, model) -> io.NodeOutput:
+        provider = {"base_url": base_url, "api_key": api_key, "profile": profile, "model": model}
+        entry = config.cached_entry(base_url)
+        if entry is None:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+                result = await client.probe(session, base_url, api_key)
+            if not result["ok"]:
+                return io.NodeOutput(provider, "Provider unreachable: {}".format(result["error"]))
+            detected = profile if profile != "auto" else result["profile"]
+            config.update_cache(base_url, detected, result["models"], context=result.get("context"))
+            entry = config.cached_entry(base_url)
+        return io.NodeOutput(provider, profiles.format_info(entry))
