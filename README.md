@@ -1,75 +1,80 @@
 # ComfyUI-LLMClient
 
-LLM client nodes for ComfyUI that talk to any OpenAI-API-style provider:
-llama.cpp (llama-server), vLLM, NInfer, Strata, OpenAI, or any generic
-OpenAI-compatible server. Connection test with model refresh, chat with
-vision support, and a capability-based model unload/sleep node.
+LLM nodes for ComfyUI over any OpenAI-compatible API (llama.cpp, vLLM,
+NInfer, Strata, OpenAI, ...): prompt generation and enhancement, image
+captioning and analysis, text extraction — `output` routes to any string
+socket in your graph.
 
-No new dependencies — uses aiohttp, Pillow, and torch already shipped with ComfyUI.
+No new dependencies: aiohttp, Pillow, and torch already ship with ComfyUI.
 
 ## Install
 
-- Comfy Registry: pending publish (`comfy-cli install comfyui-llmclient` once live)
-- ComfyUI-Manager: install via git URL `https://github.com/changeme/ComfyUI-LLMClient`
-- Manual: clone into `ComfyUI/custom_nodes/ComfyUI-LLMClient` and restart
+- **ComfyUI-Manager**: git URL `https://github.com/Vex131/ComfyUI-LLMClient`
+- **Manual**: clone into `ComfyUI/custom_nodes/` and restart
 
-## Nodes (category: LLM Client)
+Requires a running OpenAI-compatible server, e.g.:
+
+```
+llama-server -m Qwen3-8B-Q4_K_M.gguf --port 8080
+```
+
+## Quick start
+
+1. **LLM Provider**: set `base_url` (`http://127.0.0.1:8080/v1`; `/v1` is
+   appended if missing), click **Test Connection**, pick a model.
+2. **LLM Chat**: connect the provider's `model` output, write a prompt.
+3. Wire `output` wherever you need it — CLIP Text Encode, Save Text, etc.
+
+Cancel stops generation on the server too, not just in ComfyUI.
+
+## Nodes
 
 ### LLM Provider
-Points at an OpenAI-compatible API root (e.g. `http://127.0.0.1:8080/v1`;
-`/v1` is appended if missing). Optional API key and a model combo. The
-profile (llama.cpp / vLLM / generic) is auto-detected by probing.
-Use the **Test Connection** button on the node to probe the server and
-populate the model list. Detected profiles, models,
-context size, and vision capability are cached in `providers.json` next
-to `config.py`. Outputs the `model` handle for the other nodes plus an
-`info` string (profile, context, unload support, per-model vision flags)
-you can connect to a **Preview as Text** node. The cache is also filled
-automatically on first execution.
 
-### LLM Model Config
-Optional sampling presets for LLM Chat: `temperature`, `top_p`, `top_k`,
-`max_tokens` (`-1` = provider default) and `reasoning_effort` (free text,
-empty = provider default; use only levels your provider accepts, e.g.
-`low`, `medium`, `high`, `xhigh`). Leave the `model_config` input of LLM
-Chat unconnected to use provider defaults.
+- `base_url` — OpenAI-compatible API root; `/v1` appended if missing.
+- `api_key` — optional; stored in the workflow JSON (see warning).
+- `model` — combo filled by **Test Connection**. The probe auto-detects the
+  server profile (llama.cpp / vLLM / generic) and caches models, context
+  size, and vision flags in `providers.json`; also filled on first execution.
+- Outputs: `model` handle for LLM Chat / LLM Unload, and `info` text
+  (profile, context, unload support, per-model vision flags).
 
 ### LLM Chat
-Sends system prompt + user prompt (optionally with an IMAGE input) through
-the provider handle and streams the response. Outputs `output` and
-`reasoning` (from `delta.reasoning_content` / `delta.reasoning`).
-Optional `model_config` input from the LLM Model Config node. Advanced
-`vision` override (`auto`/`yes`/`no`) and `seed`. With `auto`, a model
-detected as non-multimodal rejects image input; force `yes` to send
-images anyway. Interrupting the prompt closes the stream and stops
-generation on the provider.
+
+Streams the reply.
+
+- `prompt`, optional `system_prompt`, optional `image`.
+- `vision` — `auto` rejects images for models detected as text-only; `yes`
+  forces it.
+- `model_config` — optional sampling overrides (see LLM Model Config).
+- `seed` — `-1` = random.
+- Outputs: `output`, and `reasoning` (thinking trace when the model emits
+  one).
+
+### LLM Model Config
+
+Optional sampling overrides. `-1` = provider default for `temperature`,
+`top_p`, `top_k`, `max_tokens`. `reasoning_effort` is free text, empty =
+provider default; use only levels your server accepts (`low`, `medium`,
+`high`, `xhigh`, ...) — invalid values are rejected by the server.
 
 ### LLM Unload
-Asks the server to release model memory. Modes: `offload_vram_to_ram`,
-`release_all`, `wake_up`.
 
-## Unload capability matrix
+`offload_vram_to_ram` / `release_all` / `wake_up`. Support depends on the
+server (matrix below); unsupported servers fail with a clear error.
 
-| Provider | Unload support | Requirements |
-|----------|----------------|--------------|
-| vLLM     | `/sleep?level=1` (weights to RAM), `/sleep?level=2` (discard), `/wake_up` | server started with `--enable-sleep-mode` and `VLLM_SERVER_DEV_MODE=1` |
-| llama.cpp | `/models/unload`, `/models/load` (router mode only) | server in router mode (`--models-dir`) |
-| Strata   | none | — |
-| NInfer   | none | — |
-| generic / OpenAI | none | — |
+## Unload support
 
-Unsupported profiles fail with a clear error naming the provider.
+| Server | What works | Requirements |
+|--------|-----------|--------------|
+| vLLM | sleep level 1 (weights to RAM), level 2 (discard), wake | `--enable-sleep-mode` and `VLLM_SERVER_DEV_MODE=1` |
+| llama.cpp | `/models/load`, `/models/unload` | router mode (`--models-dir`) |
 
 ## API key warning
 
 The API key is a workflow input: when set, it is **stored in the workflow
 JSON**. Anyone you share the workflow with can read it.
 
-## Example workflow
+## Roadmap
 
-1. `LLM Provider`: base_url `http://127.0.0.1:8080/v1`,
-   click **Test Connection**, pick a model from the combo.
-2. `Load Image` → `LLM Chat`: connect the `model` handle and the image,
-   write a prompt like "Describe this image", read the `output` text.
-3. When done, `LLM Unload` with mode `offload_vram_to_ram` to free VRAM
-   (vLLM/llama.cpp router only).
+Planned: agentic loops and RAG, document/text input, tool use.
