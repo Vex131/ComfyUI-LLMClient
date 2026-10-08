@@ -5,8 +5,10 @@ version = "0.1.0"
 license = { text = "MIT" }
 dependencies = []
 
+[project.urls]
+Repository = "https://github.com/Vex131/ComfyUI-LLMClient"
+
 [tool.comfy]
 PublisherId = "vex131"
 DisplayName = "ComfyUI-LLMClient"
 License = "MIT"
-Repository = "https://github.com/Vex131/ComfyUI-LLMClient"

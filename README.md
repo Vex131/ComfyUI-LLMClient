@@ -9,7 +9,9 @@ No new dependencies: aiohttp, Pillow, and torch already ship with ComfyUI.
 
 ## Install
 
-- **ComfyUI-Manager**: git URL `https://github.com/Vex131/ComfyUI-LLMClient`
+- **ComfyUI-Manager**: search `ComfyUI-LLMClient`, or install via git URL
+  `https://github.com/Vex131/ComfyUI-LLMClient`
+- **comfy-cli**: `comfy node install comfyui-llmclient`
 - **Manual**: clone into `ComfyUI/custom_nodes/` and restart
 
 Requires a running OpenAI-compatible server, e.g.:
