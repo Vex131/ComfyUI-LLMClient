@@ -89,14 +89,15 @@ def build_chat_payload(model: str, messages: list, sampling: dict = None, seed: 
             payload["top_k"] = sampling["top_k"]
         if sampling["max_tokens"] >= 0:
             payload["max_tokens"] = sampling["max_tokens"]
-        if sampling["reasoning_effort"] != "default":
+        if sampling["reasoning_effort"]:
             payload["reasoning_effort"] = sampling["reasoning_effort"]
     if seed >= 0:
         payload["seed"] = seed
     return payload
 
 
-async def chat_stream(session, base_url: str, api_key: str, payload: dict, on_chunk) -> tuple[str, str]:
+async def chat_stream(session, base_url: str, api_key: str, payload: dict, on_chunk,
+                      should_interrupt=None) -> tuple[str, str]:
     root = normalize_root(base_url)
     text = ""
     reasoning = ""
@@ -105,6 +106,11 @@ async def chat_stream(session, base_url: str, api_key: str, payload: dict, on_ch
         if resp.status != 200:
             raise RuntimeError("HTTP {} from provider: {}".format(resp.status, (await resp.text())[:500]))
         async for raw_line in resp.content:
+            if should_interrupt is not None and should_interrupt():
+                # Closing the response drops the connection so the provider
+                # aborts generation instead of decoding to the end of context.
+                resp.close()
+                break
             line = raw_line.decode("utf-8", errors="replace").strip()
             if not line.startswith("data:"):
                 continue

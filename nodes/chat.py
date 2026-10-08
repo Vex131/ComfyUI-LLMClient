@@ -2,6 +2,7 @@ import base64
 from io import BytesIO
 
 import aiohttp
+import comfy.model_management
 from comfy_api.latest import ComfyAPISync, io
 from PIL import Image
 
@@ -29,8 +30,8 @@ class LLMChat(io.ComfyNode):
                 LLMProviderType.Input("model"),
                 io.String.Input("system_prompt", multiline=True, default="", optional=True),
                 io.String.Input("prompt", multiline=True, default=""),
-                io.Image.Input("image", optional=True),
                 LLMModelConfigType.Input("model_config", optional=True, tooltip="Unconnected = provider defaults"),
+                io.Image.Input("image", optional=True),
                 io.Combo.Input(
                     "vision",
                     options=["auto", "yes", "no"],
@@ -83,5 +84,9 @@ class LLMChat(io.ComfyNode):
                 api.execution.set_progress(text_len, max_tokens)
 
         async with aiohttp.ClientSession() as session:
-            text, reasoning = await client.chat_stream(session, base_url, api_key, payload, on_chunk)
+            text, reasoning = await client.chat_stream(
+                session, base_url, api_key, payload, on_chunk,
+                should_interrupt=comfy.model_management.processing_interrupted,
+            )
+        comfy.model_management.throw_exception_if_processing_interrupted()
         return io.NodeOutput(text, reasoning)

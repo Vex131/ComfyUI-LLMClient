@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import tempfile
@@ -137,6 +138,63 @@ class ChatStreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reasoning, "thinking")
         self.assertEqual(chunks_seen, [3, 3, 5])
 
+    async def test_chat_stream_interrupt_stops_generation(self):
+        streamed = []
+        disconnected = []
+
+        async def chat_handler(request):
+            resp = web.StreamResponse()
+            resp.content_type = "text/event-stream"
+            await resp.prepare(request)
+            try:
+                for i in range(100):
+                    await asyncio.sleep(0.01)
+                    chunk = {"choices": [{"delta": {"content": "x{} ".format(i)}}]}
+                    await resp.write(("data: " + json.dumps(chunk) + "\n\n").encode())
+                    streamed.append(i)
+                await resp.write(b"data: [DONE]\n\n")
+            except (ConnectionResetError, asyncio.CancelledError):
+                disconnected.append(True)
+            return resp
+
+        app = web.Application()
+        app.router.add_post("/v1/chat/completions", chat_handler)
+        seen = []
+
+        async def run(session, base):
+            return await client.chat_stream(
+                session, base, "",
+                {"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+                lambda n: seen.append(n),
+                should_interrupt=lambda: len(seen) >= 3,
+            )
+
+        text, _ = await _with_server(app, run)
+        self.assertEqual(text.count("x"), 3)
+        self.assertLess(len(streamed), 100)
+        self.assertTrue(disconnected)
+
+    async def test_default_config_sentinels_never_reach_provider(self):
+        bodies = []
+
+        async def chat_handler(request):
+            bodies.append(await request.json())
+            return web.json_response({"choices": [{"delta": {"content": "ok"}}]})
+
+        app = web.Application()
+        app.router.add_post("/v1/chat/completions", chat_handler)
+
+        sampling = {"temperature": -1.0, "top_p": -1.0, "top_k": -1, "max_tokens": -1,
+                    "reasoning_effort": ""}
+        payload = client.build_chat_payload("m", [{"role": "user", "content": "hi"}], sampling, seed=-1)
+
+        async def run(session, base):
+            return await client.chat_stream(session, base, "", payload, lambda n: None)
+
+        await _with_server(app, run)
+        self.assertEqual(bodies[0], {"model": "m", "messages": [{"role": "user", "content": "hi"}],
+                                    "stream": True})
+
 
 class UnloadTests(unittest.IsolatedAsyncioTestCase):
     async def test_unload_vllm_sleep(self):
@@ -171,19 +229,19 @@ class BuildPayloadTests(unittest.TestCase):
 
     def test_config_sentinels_skipped(self):
         sampling = {"temperature": -1.0, "top_p": -1.0, "top_k": -1, "max_tokens": -1,
-                    "reasoning_effort": "default"}
+                    "reasoning_effort": ""}
         payload = client.build_chat_payload("m", self.MESSAGES, sampling, seed=-1)
         self.assertEqual(payload, {"model": "m", "messages": self.MESSAGES})
 
     def test_config_values_and_seed(self):
         sampling = {"temperature": 0.7, "top_p": 0.9, "top_k": 40, "max_tokens": 512,
-                    "reasoning_effort": "high"}
+                     "reasoning_effort": "xhigh"}
         payload = client.build_chat_payload("m", self.MESSAGES, sampling, seed=7)
         self.assertEqual(payload["temperature"], 0.7)
         self.assertEqual(payload["top_p"], 0.9)
         self.assertEqual(payload["top_k"], 40)
         self.assertEqual(payload["max_tokens"], 512)
-        self.assertEqual(payload["reasoning_effort"], "high")
+        self.assertEqual(payload["reasoning_effort"], "xhigh")
         self.assertEqual(payload["seed"], 7)
 
 

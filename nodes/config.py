@@ -35,13 +35,13 @@ class LLMModelConfig(io.ComfyNode):
                     max=1000000,
                     tooltip="-1 = provider default",
                 ),
-                io.Combo.Input(
+                io.String.Input(
                     "reasoning_effort",
-                    options=["default", "minimal", "low", "medium", "high"],
-                    default="default",
+                    default="",
+                    tooltip="Empty = provider default. Provider-specific levels only, e.g. minimal, low, medium, high, xhigh",
                 ),
             ],
-            outputs=[LLMModelConfigType.Output("config")],
+            outputs=[LLMModelConfigType.Output("model_config")],
         )
 
     @classmethod

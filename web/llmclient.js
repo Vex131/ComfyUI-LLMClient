@@ -15,7 +15,6 @@ function setButtonLabel(button, text) {
 async function testConnection(node, button, prefix) {
     const baseUrl = getWidget(node, "base_url")?.value ?? "";
     const apiKey = getWidget(node, "api_key")?.value ?? "";
-    const profile = getWidget(node, "profile")?.value ?? "auto";
 
     setButtonLabel(button, prefix + ": ...");
     node.setDirtyCanvas(true, true);
@@ -24,7 +23,7 @@ async function testConnection(node, button, prefix) {
         const resp = await api.fetchApi("/llmclient/test", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ base_url: baseUrl, api_key: apiKey, profile }),
+            body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
         });
         if (!resp.ok) {
             throw new Error("HTTP " + resp.status);
@@ -63,9 +62,6 @@ app.registerExtension({
         }
         const test = node.addWidget("button", "test_connection", "Test Connection", () =>
             testConnection(node, test, "Test Connection")
-        );
-        const refresh = node.addWidget("button", "refresh_models", "Refresh Models", () =>
-            testConnection(node, refresh, "Refresh Models")
         );
     },
 });

@@ -17,10 +17,10 @@ No new dependencies — uses aiohttp, Pillow, and torch already shipped with Com
 
 ### LLM Provider
 Points at an OpenAI-compatible API root (e.g. `http://127.0.0.1:8080/v1`;
-`/v1` is appended if missing). Optional API key, provider profile
-(`auto` detects llama.cpp / vLLM / generic), and a model combo.
-Use the **Test Connection** / **Refresh Models** buttons on the node to
-probe the server and populate the model list. Detected profiles, models,
+`/v1` is appended if missing). Optional API key and a model combo. The
+profile (llama.cpp / vLLM / generic) is auto-detected by probing.
+Use the **Test Connection** button on the node to probe the server and
+populate the model list. Detected profiles, models,
 context size, and vision capability are cached in `providers.json` next
 to `config.py`. Outputs the `model` handle for the other nodes plus an
 `info` string (profile, context, unload support, per-model vision flags)
@@ -29,8 +29,10 @@ automatically on first execution.
 
 ### LLM Model Config
 Optional sampling presets for LLM Chat: `temperature`, `top_p`, `top_k`,
-`max_tokens`, `reasoning_effort` (all `-1`/`default` = provider default).
-Leave the `config` input of LLM Chat unconnected to use provider defaults.
+`max_tokens` (`-1` = provider default) and `reasoning_effort` (free text,
+empty = provider default; use only levels your provider accepts, e.g.
+`low`, `medium`, `high`, `xhigh`). Leave the `model_config` input of LLM
+Chat unconnected to use provider defaults.
 
 ### LLM Chat
 Sends system prompt + user prompt (optionally with an IMAGE input) through
@@ -39,7 +41,8 @@ the provider handle and streams the response. Outputs `output` and
 Optional `model_config` input from the LLM Model Config node. Advanced
 `vision` override (`auto`/`yes`/`no`) and `seed`. With `auto`, a model
 detected as non-multimodal rejects image input; force `yes` to send
-images anyway.
+images anyway. Interrupting the prompt closes the stream and stops
+generation on the provider.
 
 ### LLM Unload
 Asks the server to release model memory. Modes: `offload_vram_to_ram`,
@@ -64,7 +67,7 @@ JSON**. Anyone you share the workflow with can read it.
 
 ## Example workflow
 
-1. `LLM Provider`: base_url `http://127.0.0.1:8080/v1`, profile `auto`,
+1. `LLM Provider`: base_url `http://127.0.0.1:8080/v1`,
    click **Test Connection**, pick a model from the combo.
 2. `Load Image` → `LLM Chat`: connect the `model` handle and the image,
    write a prompt like "Describe this image", read the `output` text.

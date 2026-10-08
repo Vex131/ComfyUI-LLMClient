@@ -27,10 +27,8 @@ class LLMUnload(io.ComfyNode):
     @classmethod
     async def execute(cls, model, mode) -> io.NodeOutput:
         base_url = model["base_url"]
-        profile = model.get("profile", "auto")
-        if profile == "auto":
-            entry = config.load_cache().get(base_url)
-            profile = entry["profile"] if entry else "generic"
+        entry = config.cached_entry(base_url)
+        profile = entry["profile"] if entry else "generic"
 
         async with aiohttp.ClientSession() as session:
             status = await client.unload_command(
