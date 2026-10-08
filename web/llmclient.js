@@ -34,7 +34,11 @@ async function testConnection(node, button, prefix) {
             const ids = (data.models || []).map((m) => m.id);
             const model = getWidget(node, "model");
             if (model && ids.length > 0) {
-                model.options = ids;
+                if (model.options && typeof model.options === "object" && !Array.isArray(model.options)) {
+                    model.options.values = ids;
+                } else {
+                    model.options = { values: ids };
+                }
                 if (!ids.includes(model.value)) {
                     model.value = ids[0];
                 }

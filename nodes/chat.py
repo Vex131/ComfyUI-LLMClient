@@ -26,7 +26,7 @@ class LLMChat(io.ComfyNode):
             display_name="LLM Chat",
             category="LLM Client",
             inputs=[
-                LLMProviderType.Input("provider"),
+                LLMProviderType.Input("model"),
                 io.String.Input("system_prompt", multiline=True, default="", optional=True),
                 io.String.Input("prompt", multiline=True, default=""),
                 io.Image.Input("image", optional=True),
@@ -47,11 +47,11 @@ class LLMChat(io.ComfyNode):
         )
 
     @classmethod
-    async def execute(cls, provider, system_prompt, prompt, image=None, model_config=None, vision="auto",
+    async def execute(cls, model, system_prompt, prompt, image=None, model_config=None, vision="auto",
                       seed=-1) -> io.NodeOutput:
-        base_url = provider["base_url"]
-        api_key = provider.get("api_key", "")
-        model = provider["model"]
+        base_url = model["base_url"]
+        api_key = model.get("api_key", "")
+        model_id = model["model"]
 
         messages = []
         if system_prompt:
@@ -63,9 +63,9 @@ class LLMChat(io.ComfyNode):
                 raise ValueError("Vision override is set to 'no' but an image is connected.")
             if vision == "auto":
                 for entry in config.cached_models(base_url):
-                    if entry.get("id") == model and entry.get("vision") is False:
+                    if entry.get("id") == model_id and entry.get("vision") is False:
                         raise ValueError(
-                            "Selected model '{}' does not support image input. Set the vision override to 'yes' to force it.".format(model)
+                            "Selected model '{}' does not support image input. Set the vision override to 'yes' to force it.".format(model_id)
                         )
             content = [
                 {"type": "text", "text": prompt},
@@ -73,7 +73,7 @@ class LLMChat(io.ComfyNode):
             ]
         messages.append({"role": "user", "content": content})
 
-        payload = client.build_chat_payload(model, messages, model_config, seed)
+        payload = client.build_chat_payload(model_id, messages, model_config, seed)
         max_tokens = model_config["max_tokens"] if model_config else -1
 
         api = ComfyAPISync()
