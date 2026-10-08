@@ -6,6 +6,7 @@ license = { text = "MIT" }
 dependencies = []
 
 [tool.comfy]
-PublisherId = "changeme"
+PublisherId = "vex131"
 DisplayName = "ComfyUI-LLMClient"
 License = "MIT"
+Repository = "https://github.com/Vex131/ComfyUI-LLMClient"
