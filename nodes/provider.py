@@ -2,7 +2,7 @@ import aiohttp
 from comfy_api.latest import io
 
 from .. import config
-from ..providers import client, profiles
+from ..providers import client
 
 LLMProviderType = io.Custom("LLM_PROVIDER")
 
@@ -36,19 +36,15 @@ class LLMProvider(io.ComfyNode):
             ],
             outputs=[
                 LLMProviderType.Output("model"),
-                io.String.Output("info"),
             ],
         )
 
     @classmethod
     async def execute(cls, base_url, api_key, model) -> io.NodeOutput:
         provider = {"base_url": base_url, "api_key": api_key, "model": model}
-        entry = config.cached_entry(base_url)
-        if entry is None:
+        if config.cached_entry(base_url) is None:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
                 result = await client.probe(session, base_url, api_key)
-            if not result["ok"]:
-                return io.NodeOutput(provider, "Provider unreachable: {}".format(result["error"]))
-            config.update_cache(base_url, result["profile"], result["models"], context=result.get("context"))
-            entry = config.cached_entry(base_url)
-        return io.NodeOutput(provider, profiles.format_info(entry))
+            if result["ok"]:
+                config.update_cache(base_url, result["profile"], result["models"], context=result.get("context"))
+        return io.NodeOutput(provider)

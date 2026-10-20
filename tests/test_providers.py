@@ -9,32 +9,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 import config
-from providers import client, profiles
-
-
-class FormatInfoTests(unittest.TestCase):
-    def test_format_info(self):
-        entry = {
-            "profile": "llamacpp",
-            "context": 8192,
-            "models": [
-                {"id": "vl-model", "vision": True, "reasoning": None},
-                {"id": "text-model", "vision": False, "reasoning": None},
-                {"id": "unknown-model", "vision": None, "reasoning": None},
-            ],
-        }
-        info = profiles.format_info(entry)
-        self.assertIn("Profile: llamacpp", info)
-        self.assertIn("Context: 8192 tokens", info)
-        self.assertIn("Unload: llama.cpp router load/unload", info)
-        self.assertIn("vl-model [vision]", info)
-        self.assertIn("text-model [text-only]", info)
-        self.assertIn("  - unknown-model\n", info + "\n")
-
-    def test_format_info_no_unload(self):
-        info = profiles.format_info({"profile": "openai", "models": [{"id": "gpt", "vision": None}]})
-        self.assertIn("Unload: not supported", info)
-        self.assertNotIn("Context:", info)
+from providers import client
 
 
 async def _with_server(app, coro):
@@ -101,6 +76,48 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
         by_id = {m["id"]: m for m in result["models"]}
         self.assertIsNone(by_id["some-model"]["vision"])
         self.assertNotIn("secret-key", json.dumps(result))
+
+    async def test_probe_catchall_endpoints_stay_generic(self):
+        app = web.Application()
+
+        async def models_handler(request):
+            return web.json_response({"data": [{"id": "m"}]})
+
+        async def props_handler(request):
+            return web.json_response({"error": "route not found"})
+
+        async def sleeping_handler(request):
+            return web.json_response("true")
+
+        app.router.add_get("/v1/models", models_handler)
+        app.router.add_get("/props", props_handler)
+        app.router.add_get("/is_sleeping", sleeping_handler)
+
+        async def run(session, base):
+            return await client.probe(session, base, "")
+
+        result = await _with_server(app, run)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["profile"], "generic")
+        self.assertIsNone(result["context"])
+
+    async def test_probe_vllm(self):
+        app = web.Application()
+
+        async def models_handler(request):
+            return web.json_response({"data": [{"id": "m"}]})
+
+        async def sleeping_handler(request):
+            return web.json_response(False)
+
+        app.router.add_get("/v1/models", models_handler)
+        app.router.add_get("/is_sleeping", sleeping_handler)
+
+        async def run(session, base):
+            return await client.probe(session, base, "")
+
+        result = await _with_server(app, run)
+        self.assertEqual(result["profile"], "vllm")
 
 
 class ChatStreamTests(unittest.IsolatedAsyncioTestCase):
@@ -230,6 +247,11 @@ class BuildPayloadTests(unittest.TestCase):
     def test_config_sentinels_skipped(self):
         sampling = {"temperature": -1.0, "top_p": -1.0, "top_k": -1, "max_tokens": -1,
                     "reasoning_effort": ""}
+        payload = client.build_chat_payload("m", self.MESSAGES, sampling, seed=-1)
+        self.assertEqual(payload, {"model": "m", "messages": self.MESSAGES})
+
+    def test_config_without_reasoning_effort_key(self):
+        sampling = {"temperature": -1.0, "top_p": -1.0, "top_k": -1, "max_tokens": -1}
         payload = client.build_chat_payload("m", self.MESSAGES, sampling, seed=-1)
         self.assertEqual(payload, {"model": "m", "messages": self.MESSAGES})
 

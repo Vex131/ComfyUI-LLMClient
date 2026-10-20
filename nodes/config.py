@@ -35,23 +35,17 @@ class LLMModelConfig(io.ComfyNode):
                     max=1000000,
                     tooltip="-1 = provider default",
                 ),
-                io.String.Input(
-                    "reasoning_effort",
-                    default="",
-                    tooltip="Empty = provider default. Provider-specific levels only, e.g. minimal, low, medium, high, xhigh",
-                ),
             ],
             outputs=[LLMModelConfigType.Output("model_config")],
         )
 
     @classmethod
-    def execute(cls, temperature, top_p, top_k, max_tokens, reasoning_effort) -> io.NodeOutput:
+    def execute(cls, temperature, top_p, top_k, max_tokens) -> io.NodeOutput:
         return io.NodeOutput(
             {
                 "temperature": temperature,
                 "top_p": top_p,
                 "top_k": top_k,
                 "max_tokens": max_tokens,
-                "reasoning_effort": reasoning_effort,
             }
         )

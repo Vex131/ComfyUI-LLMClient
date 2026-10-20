@@ -39,6 +39,12 @@ class LLMChat(io.ComfyNode):
                     advanced=True,
                     tooltip="Override vision detection for this model",
                 ),
+                io.String.Input(
+                    "reasoning_effort",
+                    default="",
+                    advanced=True,
+                    tooltip="Empty = provider default. Provider-specific levels only, e.g. minimal, low, medium, high, xhigh",
+                ),
                 io.Int.Input("seed", default=-1, min=-1, max=2147483647, control_after_generate=True, advanced=True),
             ],
             outputs=[
@@ -49,7 +55,7 @@ class LLMChat(io.ComfyNode):
 
     @classmethod
     async def execute(cls, model, system_prompt, prompt, image=None, model_config=None, vision="auto",
-                      seed=-1) -> io.NodeOutput:
+                      reasoning_effort="", seed=-1) -> io.NodeOutput:
         base_url = model["base_url"]
         api_key = model.get("api_key", "")
         model_id = model["model"]
@@ -74,8 +80,12 @@ class LLMChat(io.ComfyNode):
             ]
         messages.append({"role": "user", "content": content})
 
-        payload = client.build_chat_payload(model_id, messages, model_config, seed)
-        max_tokens = model_config["max_tokens"] if model_config else -1
+        sampling = dict(model_config) if model_config else {}
+        if reasoning_effort:
+            sampling["reasoning_effort"] = reasoning_effort
+
+        payload = client.build_chat_payload(model_id, messages, sampling, seed)
+        max_tokens = sampling.get("max_tokens", -1)
 
         api = ComfyAPISync()
 

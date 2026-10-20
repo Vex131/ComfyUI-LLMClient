@@ -38,8 +38,9 @@ Cancel stops generation on the server too, not just in ComfyUI.
 - `model` — combo filled by **Test Connection**. The probe auto-detects the
   server profile (llama.cpp / vLLM / generic) and caches models, context
   size, and vision flags in `providers.json`; also filled on first execution.
-- Outputs: `model` handle for LLM Chat / LLM Unload, and `info` text
-  (profile, context, unload support, per-model vision flags).
+  The button label reports the result, e.g. `OK (3 models · llamacpp ·
+  8192 ctx)`.
+- Output: `model` handle for LLM Chat / LLM Agent / LLM Unload.
 
 ### LLM Chat
 
@@ -49,6 +50,9 @@ Streams the reply.
 - `vision` — `auto` rejects images for models detected as text-only; `yes`
   forces it.
 - `model_config` — optional sampling overrides (see LLM Model Config).
+- `reasoning_effort` — empty = provider default; provider-specific levels
+  only (`low`, `medium`, `high`, `xhigh`, ...), invalid values are rejected
+  by the server.
 - `seed` — `-1` = random.
 - Outputs: `output`, and `reasoning` (thinking trace when the model emits
   one).
@@ -68,8 +72,10 @@ Purpose and tools for the LLM Agent.
   `get_model_details` (embedded safetensors metadata: description cards,
   trigger words, training tags; plus sidecar `.txt`/`.md`/`.json` card
   files next to each model).
-- `web_tool` — `web_fetch`: look up model cards, trigger words or docs
-  online when local info is missing.
+- `web_tool` — `web_search` (DuckDuckGo, no key needed) and `web_fetch`:
+  search the web, then read the full page of a promising result — model
+  cards, trigger words, docs. If DuckDuckGo blocks the request the tool
+  reports the failure to the model instead of failing the run.
 - `tool_mode` (advanced) — `auto` uses native OpenAI tool-calling and falls
   back to a JSON text protocol when the server rejects tools. `native`
   requires support (llama.cpp: `--jinja`; vLLM:
@@ -83,7 +89,7 @@ Agentic loop: model → tool calls → results → ... until a final answer.
 Streams each turn; Cancel works like LLM Chat.
 
 - `model`, optional `agent_config` (unconnected = generic agent, all tools
-  on), `prompt`, optional `model_config`, `seed`.
+  on), `prompt`, optional `model_config`, `reasoning_effort`, `seed`.
 - Outputs: `output` (final answer), `reasoning`, and `session` — the full
   transcript (JSON) of every assistant turn, tool call and tool result.
   Wire `output`/`session` to any text viewer.
@@ -110,9 +116,8 @@ regex nodes.
 ### LLM Model Config
 
 Optional sampling overrides. `-1` = provider default for `temperature`,
-`top_p`, `top_k`, `max_tokens`. `reasoning_effort` is free text, empty =
-provider default; use only levels your server accepts (`low`, `medium`,
-`high`, `xhigh`, ...) — invalid values are rejected by the server.
+`top_p`, `top_k`, `max_tokens`. `reasoning_effort` lives directly on LLM
+Chat / LLM Agent instead.
 
 ### LLM Unload
 
@@ -139,4 +144,6 @@ JSON**. Anyone you share the workflow with can read it.
 
 ## Roadmap
 
-Planned: RAG over local documents, document/text input nodes.
+Planned: RAG over local documents, document/text input nodes, API-key web
+search backend (Tavily/Brave/Serper-style) as a more reliable alternative
+to DuckDuckGo scraping.

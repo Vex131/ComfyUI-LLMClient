@@ -208,6 +208,40 @@ class RunLoopTests(unittest.TestCase):
         self.assertEqual(result["iterations"], 3)
         self.assertEqual(result["final"], "working")
 
+    def test_web_search_then_web_fetch_sequence(self):
+        def scripted(body, turn):
+            if turn == 0:
+                declared = [t["function"]["name"] for t in body["tools"]]
+                assert "web_search" in declared and "web_fetch" in declared
+                return delta_response(
+                    tool_call_chunks("web_search", '{"query": "qwen3 lora"}', call_id="c1"))
+            if turn == 1:
+                return delta_response(
+                    tool_call_chunks("web_fetch", '{"url": "http://x/card"}', call_id="c2"))
+            return delta_response([{"content": "done"}])
+
+        order = []
+
+        async def search_impl(args, session):
+            order.append(("web_search", args))
+            return "1. Card\n   http://x/card"
+
+        async def fetch_impl(args, session):
+            order.append(("web_fetch", args))
+            return "card text"
+
+        async def run(session, base):
+            messages = [{"role": "user", "content": "find triggers"}]
+            return await agent.run_loop(session, base, "", "m", messages,
+                                        tool_impls={"web_search": search_impl, "web_fetch": fetch_impl},
+                                        max_iterations=4)
+
+        result = asyncio.run(_with_server(self._tool_app(scripted), run))
+        self.assertEqual(result["final"], "done")
+        self.assertEqual(result["iterations"], 3)
+        self.assertEqual(order, [("web_search", {"query": "qwen3 lora"}),
+                                 ("web_fetch", {"url": "http://x/card"})])
+
     def test_tool_error_reported_to_model(self):
         def scripted(body, turn):
             if turn == 0:

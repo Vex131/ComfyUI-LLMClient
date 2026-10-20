@@ -4,7 +4,7 @@ import aiohttp
 import comfy.model_management
 from comfy_api.latest import ComfyAPISync, io
 
-from ..providers import agent, webfetch
+from ..providers import agent, webfetch, websearch
 from . import assets
 from .agent_config import LLMAgentConfigType
 from .config import LLMModelConfigType
@@ -45,6 +45,12 @@ class LLMAgent(io.ComfyNode):
                                 tooltip="The task for the agent"),
                 LLMModelConfigType.Input("model_config", optional=True,
                                          tooltip="Unconnected = provider defaults"),
+                io.String.Input(
+                    "reasoning_effort",
+                    default="",
+                    advanced=True,
+                    tooltip="Empty = provider default. Provider-specific levels only, e.g. minimal, low, medium, high, xhigh",
+                ),
                 io.Int.Input("seed", default=-1, min=-1, max=2147483647, control_after_generate=True,
                              advanced=True),
             ],
@@ -59,7 +65,8 @@ class LLMAgent(io.ComfyNode):
         )
 
     @classmethod
-    async def execute(cls, model, prompt, agent_config=None, model_config=None, seed=-1) -> io.NodeOutput:
+    async def execute(cls, model, prompt, agent_config=None, model_config=None, reasoning_effort="",
+                      seed=-1) -> io.NodeOutput:
         base_url = model["base_url"]
         api_key = model.get("api_key", "")
         model_id = model["model"]
@@ -88,14 +95,21 @@ class LLMAgent(io.ComfyNode):
         async def web_tool_impl(args, session):
             return await webfetch.fetch_text(session, args.get("url", ""))
 
+        async def web_search_impl(args, session):
+            return await websearch.search(session, args.get("query", ""))
+
         tool_impls = {}
         if cfg["assets_tool"]:
             tool_impls["list_local_models"] = list_tool
             tool_impls["get_model_details"] = details_tool
         if cfg["web_tool"]:
             tool_impls["web_fetch"] = web_tool_impl
+            tool_impls["web_search"] = web_search_impl
 
-        max_tokens = model_config["max_tokens"] if model_config else -1
+        sampling = dict(model_config) if model_config else {}
+        if reasoning_effort:
+            sampling["reasoning_effort"] = reasoning_effort
+        max_tokens = sampling.get("max_tokens", -1)
         api = ComfyAPISync()
 
         def on_chunk(text_len):
@@ -105,7 +119,7 @@ class LLMAgent(io.ComfyNode):
         async with aiohttp.ClientSession() as session:
             result = await agent.run_loop(
                 session, base_url, api_key, model_id, messages,
-                sampling=model_config,
+                sampling=sampling,
                 seed=seed,
                 tool_impls=tool_impls,
                 max_iterations=cfg["max_iterations"],

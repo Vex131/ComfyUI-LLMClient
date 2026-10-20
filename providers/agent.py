@@ -54,6 +54,19 @@ TOOL_SCHEMAS = {
             },
         },
     },
+    "web_search": {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web (DuckDuckGo). Returns titles, URLs and snippets. "
+                           "Call web_fetch on a promising result to read the full page.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "Search query."}},
+                "required": ["query"],
+            },
+        },
+    },
 }
 
 REACT_SYSTEM = (

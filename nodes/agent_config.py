@@ -39,7 +39,7 @@ class LLMAgentConfig(io.ComfyNode):
                 io.Boolean.Input(
                     "web_tool",
                     default=True,
-                    tooltip="web_fetch: look up model cards, trigger words or docs online",
+                    tooltip="web_search / web_fetch: look up model cards, trigger words or docs online",
                 ),
                 io.Combo.Input(
                     "tool_mode",

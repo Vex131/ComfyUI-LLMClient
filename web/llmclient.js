@@ -42,7 +42,14 @@ async function testConnection(node, button, prefix) {
                     model.value = ids[0];
                 }
             }
-            setButtonLabel(button, `${prefix}: OK (${ids.length} models)`);
+            const parts = [`${ids.length} models`];
+            if (data.profile && data.profile !== "generic") {
+                parts.push(data.profile);
+            }
+            if (data.context) {
+                parts.push(`${data.context} ctx`);
+            }
+            setButtonLabel(button, `${prefix}: OK (${parts.join(" · ")})`);
         } else {
             setButtonLabel(button, prefix + ": FAILED");
             console.warn("LLM Client connection test failed:", data.error);

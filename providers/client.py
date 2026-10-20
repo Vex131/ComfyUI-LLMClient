@@ -29,12 +29,14 @@ def _headers(api_key: str) -> dict:
     return headers
 
 
-async def _reachable(session, url: str, headers: dict) -> bool:
+async def _get_json(session, url: str, headers: dict):
     try:
         async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=3)) as resp:
-            return resp.status == 200
-    except aiohttp.ClientError:
-        return False
+            if resp.status != 200:
+                return None
+            return await resp.json(content_type=None)
+    except (aiohttp.ClientError, ValueError):
+        return None
 
 
 async def probe(session, base_url: str, api_key: str) -> dict:
@@ -64,16 +66,11 @@ async def probe(session, base_url: str, api_key: str) -> dict:
 
     profile = "generic"
     context = None
-    if await _reachable(session, origin + "/props", headers):
+    props = await _get_json(session, origin + "/props", headers)
+    if isinstance(props, dict) and ("total_n_ctx" in props or "slot_n_ctx" in props):
         profile = "llamacpp"
-        try:
-            async with session.get(origin + "/props", headers=headers, timeout=aiohttp.ClientTimeout(total=3)) as resp:
-                if resp.status == 200:
-                    props = await resp.json()
-                    context = props.get("total_n_ctx") or props.get("slot_n_ctx")
-        except (aiohttp.ClientError, ValueError):
-            pass
-    elif await _reachable(session, origin + "/is_sleeping", headers):
+        context = props.get("total_n_ctx") or props.get("slot_n_ctx")
+    elif isinstance(await _get_json(session, origin + "/is_sleeping", headers), bool):
         profile = "vllm"
     return {"ok": True, "profile": profile, "models": models, "context": context, "error": None}
 
@@ -89,7 +86,7 @@ def build_chat_payload(model: str, messages: list, sampling: dict = None, seed: 
             payload["top_k"] = sampling["top_k"]
         if sampling["max_tokens"] >= 0:
             payload["max_tokens"] = sampling["max_tokens"]
-        if sampling["reasoning_effort"]:
+        if sampling.get("reasoning_effort"):
             payload["reasoning_effort"] = sampling["reasoning_effort"]
     if seed >= 0:
         payload["seed"] = seed
