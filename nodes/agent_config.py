@@ -50,7 +50,7 @@ class LLMAgentConfig(io.ComfyNode):
                             "tools. native = require tool-calling support (llama.cpp --jinja, "
                             "vLLM --enable-auto-tool-choice). json = text protocol only.",
                 ),
-                io.Int.Input("max_iterations", default=8, min=1, max=64, advanced=True),
+                io.Int.Input("max_iterations", default=18, min=1, max=64, advanced=True),
             ],
             outputs=[LLMAgentConfigType.Output("agent_config")],
         )

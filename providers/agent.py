@@ -260,6 +260,33 @@ async def run_loop(session, base_url: str, api_key: str, model: str, messages: l
                 args = {}
             result = await _call_tool(tool_impls, c["name"], args, session)
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
+    else:
+        if should_interrupt is None or not should_interrupt():
+            messages.append({"role": "user",
+                             "content": "Iteration budget exhausted. Produce your complete final "
+                                        "answer now, without tool calls."})
+            closing = dict(build_chat_payload(model, messages, sampling or {}, seed))
+            try:
+                text, reasoning, _ = await chat_turn(session, base_url, api_key, closing,
+                                                     on_chunk=on_chunk, should_interrupt=should_interrupt)
+            except RuntimeError:
+                text = ""
+            else:
+                if reasoning:
+                    reasoning_total += (reasoning_total and "\n" or "") + reasoning
+                assistant = {"role": "assistant"}
+                if text:
+                    assistant["content"] = text
+                messages.append(assistant)
+            final = ""
+            if text:
+                final = text
+                if react:
+                    obj = parse_react(text)
+                    if obj and obj.get("final") is not None:
+                        final = str(obj["final"])
+            if not final:
+                final = "[max iterations reached]\n" + (last_text or "")
     if final is None:
         final = last_text
     return {

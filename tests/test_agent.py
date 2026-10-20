@@ -208,6 +208,54 @@ class RunLoopTests(unittest.TestCase):
         self.assertEqual(result["iterations"], 3)
         self.assertEqual(result["final"], "working")
 
+    def test_exhaustion_closing_turn_without_tools(self):
+        requests = []
+
+        def scripted(body, turn):
+            requests.append({"body": body, "messages": list(body["messages"])})
+            if "tools" not in body:
+                return delta_response([{"content": "closing answer"}])
+            return delta_response(tool_call_chunks("loop", "{}", call_id="c{}".format(turn)))
+
+        async def loop_impl(args, session):
+            return "again"
+
+        async def run(session, base):
+            messages = [{"role": "user", "content": "loop"}]
+            return await agent.run_loop(session, base, "", "m", messages,
+                                        tool_impls={"loop": loop_impl},
+                                        max_iterations=2)
+
+        result = asyncio.run(_with_server(self._tool_app(scripted), run))
+        self.assertEqual(len(requests), 3)
+        closing = requests[-1]
+        self.assertNotIn("tools", closing["body"])
+        self.assertNotIn("tool_choice", closing["body"])
+        instructions = [m for m in closing["messages"]
+                        if m.get("role") == "user" and "Iteration budget exhausted" in (m.get("content") or "")]
+        self.assertEqual(len(instructions), 1)
+        self.assertEqual(result["final"], "closing answer")
+        self.assertEqual(result["iterations"], 2)
+
+    def test_exhaustion_empty_closing_turn(self):
+        def scripted(body, turn):
+            if "tools" not in body:
+                return delta_response([{"content": ""}])
+            return delta_response(tool_call_chunks("loop", "{}", call_id="c{}".format(turn)))
+
+        async def loop_impl(args, session):
+            return "again"
+
+        async def run(session, base):
+            messages = [{"role": "user", "content": "loop"}]
+            return await agent.run_loop(session, base, "", "m", messages,
+                                        tool_impls={"loop": loop_impl},
+                                        max_iterations=2)
+
+        result = asyncio.run(_with_server(self._tool_app(scripted), run))
+        self.assertTrue(result["final"].startswith("[max iterations reached]"))
+        self.assertIn("working", result["final"])
+
     def test_web_search_then_web_fetch_sequence(self):
         def scripted(body, turn):
             if turn == 0:

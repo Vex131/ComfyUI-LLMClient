@@ -22,7 +22,7 @@ DEFAULT_AGENT_CONFIG = {
     "assets_tool": True,
     "web_tool": True,
     "tool_mode": "auto",
-    "max_iterations": 8,
+    "max_iterations": 18,
 }
 
 
