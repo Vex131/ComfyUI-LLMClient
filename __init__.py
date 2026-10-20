@@ -2,8 +2,11 @@ from typing_extensions import override
 
 from comfy_api.latest import ComfyExtension, io
 
+from .nodes.agent import LLMAgent
+from .nodes.agent_config import LLMAgentConfig
 from .nodes.chat import LLMChat
 from .nodes.config import LLMModelConfig
+from .nodes.extract import LLMPatternExtract
 from .nodes.provider import LLMProvider
 from .nodes.unload import LLMUnload
 
@@ -21,6 +24,9 @@ class LLMClientExtension(ComfyExtension):
             LLMProvider,
             LLMModelConfig,
             LLMChat,
+            LLMAgentConfig,
+            LLMAgent,
+            LLMPatternExtract,
             LLMUnload,
         ]
 

@@ -65,3 +65,54 @@ app.registerExtension({
         );
     },
 });
+
+function parsePatternLabels(text) {
+    const labels = [];
+    for (let line of (text || "").split("\n")) {
+        line = line.trim();
+        if (!line || line.startsWith("#")) {
+            continue;
+        }
+        const idx = line.indexOf("=");
+        const label = (idx >= 0 ? line.slice(0, idx) : line).trim();
+        if (label) {
+            labels.push(label);
+        }
+    }
+    return labels;
+}
+
+function applyExtractLabels(node) {
+    if (!node.outputs) {
+        return;
+    }
+    const labels = parsePatternLabels(getWidget(node, "patterns")?.value);
+    node.outputs.forEach((output, i) => {
+        output.name = labels[i] || `field_${i + 1}`;
+    });
+    node.setDirtyCanvas(true, true);
+}
+
+app.registerExtension({
+    name: "LLMClient.Extract",
+    nodeCreated(node) {
+        if (node.comfyClass !== "LLMPatternExtract") {
+            return;
+        }
+        const patterns = getWidget(node, "patterns");
+        if (patterns) {
+            const original = patterns.callback;
+            patterns.callback = function (value, ...args) {
+                original?.call(this, value, ...args);
+                applyExtractLabels(node);
+            };
+        }
+        const originalConfigure = node.configure.bind(node);
+        node.configure = function (info) {
+            const result = originalConfigure(info);
+            applyExtractLabels(node);
+            return result;
+        };
+        applyExtractLabels(node);
+    },
+});

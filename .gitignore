@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 providers.json
 node.zip
+.serena
