@@ -65,6 +65,12 @@ provider default; use only levels your server accepts (`low`, `medium`,
 `offload_vram_to_ram` / `release_all` / `wake_up`. Support depends on the
 server (matrix below); unsupported servers fail with a clear error.
 
+Connect LLM Chat's `output` to the optional `text` input, then use LLM
+Unload's `text` output downstream to ensure generation finishes before
+unloading and downstream processing waits for the unload command. Text is
+passed through unchanged; `status` remains the first output. Leave `text`
+unconnected for standalone commands such as `wake_up`.
+
 ## Unload support
 
 | Server | What works | Requirements |

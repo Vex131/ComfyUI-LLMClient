@@ -20,12 +20,13 @@ class LLMUnload(io.ComfyNode):
                     options=["offload_vram_to_ram", "release_all", "wake_up"],
                     default="offload_vram_to_ram",
                 ),
+                io.String.Input("text", force_input=True, optional=True),
             ],
-            outputs=[io.String.Output("status")],
+            outputs=[io.String.Output("status"), io.String.Output("text")],
         )
 
     @classmethod
-    async def execute(cls, model, mode) -> io.NodeOutput:
+    async def execute(cls, model, mode, text="") -> io.NodeOutput:
         base_url = model["base_url"]
         entry = config.cached_entry(base_url)
         profile = entry["profile"] if entry else "generic"
@@ -34,4 +35,4 @@ class LLMUnload(io.ComfyNode):
             status = await client.unload_command(
                 session, base_url, model.get("api_key", ""), profile, mode, model.get("model", "")
             )
-        return io.NodeOutput(status)
+        return io.NodeOutput(status, text)
