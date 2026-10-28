@@ -30,6 +30,7 @@ def load_unload():
     config = modules["unload_test_package.config"]
     config.cached_entry = MagicMock(return_value={"profile": "vllm"})
     client = modules["unload_test_package.providers.client"]
+    client.resolve_key = MagicMock(return_value="")
     client.unload_command = AsyncMock(return_value="unloaded")
     spec = importlib.util.spec_from_file_location(
         "unload_test_package.nodes.unload",
