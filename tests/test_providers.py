@@ -1,14 +1,20 @@
 import asyncio
 import json
 import os
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+import importlib.util
+from pathlib import Path
+from types import SimpleNamespace
 
 import aiohttp
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-import config
+with patch.dict(sys.modules, {"folder_paths": SimpleNamespace(get_user_directory=lambda: "test-user")}):
+    import config
 from providers import client
 
 
@@ -268,6 +274,69 @@ class BuildPayloadTests(unittest.TestCase):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_cache_directory_override_and_default(self):
+        path = Path(config.__file__)
+        spec = importlib.util.spec_from_file_location("cache_config_test", path)
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "new", "cache")
+            with patch.dict(os.environ, {"COMFYUI_LLMCLIENT_CACHE_PATH": target}), \
+                 patch.dict(sys.modules, {"folder_paths": config.folder_paths}):
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                self.assertEqual(module.CACHE_PATH, os.path.join(target, "providers.json"))
+                module.save_cache({"test": 1})
+                self.assertEqual(module.load_cache(), {"test": 1})
+            with patch.dict(os.environ, {}, clear=True):
+                with patch.dict(sys.modules, {"folder_paths": SimpleNamespace(get_user_directory=lambda: tmp)}):
+                    module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(module)
+                self.assertEqual(module.CACHE_PATH, os.path.join(tmp, "llmclient", "providers.json"))
+                module.save_cache({"test": 2})
+                self.assertEqual(module.load_cache(), {"test": 2})
+
+    def test_legacy_cache_is_read_until_new_cache_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy = os.path.join(tmp, "legacy.json")
+            new = os.path.join(tmp, "user", "providers.json")
+            with open(legacy, "w") as f:
+                json.dump({"old": {"models": []}}, f)
+            with patch.object(config, "CACHE_PATH", new), \
+                 patch.object(config, "LEGACY_CACHE_PATH", legacy), \
+                 patch.object(config, "CACHE_OVERRIDE", None):
+                self.assertIn("old", config.load_cache())
+                self.assertTrue(os.path.isfile(new))
+                self.assertTrue(os.path.isfile(legacy))
+                config.update_cache("new", "generic", [])
+                self.assertEqual(set(config.load_cache()), {"old", "new"})
+                config.save_cache({})
+                self.assertEqual(config.load_cache(), {})
+
+    def test_legacy_migration_failure_preserves_read_access(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy = os.path.join(tmp, "legacy.json")
+            with open(legacy, "w") as f:
+                json.dump({"old": {"models": []}}, f)
+            with patch.object(config, "CACHE_PATH", os.path.join(tmp, "new", "providers.json")), \
+                 patch.object(config, "LEGACY_CACHE_PATH", legacy), \
+                 patch.object(config, "CACHE_OVERRIDE", None), \
+                 patch.object(config.os, "makedirs", side_effect=PermissionError("read-only")), \
+                 self.assertLogs(config.__name__, level="WARNING"):
+                self.assertIn("old", config.load_cache())
+            with patch.object(config, "CACHE_PATH", os.path.join(tmp, "override", "providers.json")), \
+                 patch.object(config, "LEGACY_CACHE_PATH", legacy), \
+                 patch.object(config, "CACHE_OVERRIDE", "override"):
+                self.assertEqual(config.load_cache(), {})
+
+    def test_cache_write_error_is_not_silenced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            blocked = os.path.join(tmp, "file")
+            with open(blocked, "w") as f:
+                f.write("not a directory")
+            with patch.object(config, "CACHE_PATH", os.path.join(blocked, "providers.json")):
+                self.assertEqual(config.load_cache(), {})
+                with self.assertRaises(OSError):
+                    config.save_cache({})
+
     def test_cache_round_trip(self):
         original = config.CACHE_PATH
         with tempfile.TemporaryDirectory() as tmp:

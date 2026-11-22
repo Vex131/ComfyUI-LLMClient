@@ -38,6 +38,11 @@ Cancel stops generation on the server too, not just in ComfyUI.
 - `model` — combo filled by **Test Connection**. The probe auto-detects the
   server profile (llama.cpp / vLLM / generic) and caches models, context
   size, and vision flags in `providers.json`; also filled on first execution.
+  The cache is stored automatically in `llmclient/providers.json` under
+  ComfyUI's user directory. An existing cache in the plugin directory is
+  automatically copied on first use and left in place. Optionally, set
+  `COMFYUI_LLMCLIENT_CACHE_PATH` before starting ComfyUI to use another
+  directory instead; that directory has its own cache.
   The button label reports the result, e.g. `OK (3 models · llamacpp ·
   8192 ctx)`.
 - Output: `model` handle for LLM Chat / LLM Agent / LLM Unload.
