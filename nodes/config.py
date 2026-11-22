@@ -35,17 +35,25 @@ class LLMModelConfig(io.ComfyNode):
                     max=1000000,
                     tooltip="-1 = provider default",
                 ),
+                io.Int.Input(
+                    "timeout_seconds",
+                    default=300,
+                    min=1,
+                    max=86400,
+                    tooltip="Maximum seconds for each complete model request, including streaming",
+                ),
             ],
             outputs=[LLMModelConfigType.Output("model_config")],
         )
 
     @classmethod
-    def execute(cls, temperature, top_p, top_k, max_tokens) -> io.NodeOutput:
+    def execute(cls, temperature, top_p, top_k, max_tokens, timeout_seconds=300) -> io.NodeOutput:
         return io.NodeOutput(
             {
                 "temperature": temperature,
                 "top_p": top_p,
                 "top_k": top_k,
                 "max_tokens": max_tokens,
+                "timeout_seconds": timeout_seconds,
             }
         )

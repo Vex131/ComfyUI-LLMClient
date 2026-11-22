@@ -120,9 +120,12 @@ regex nodes.
 
 ### LLM Model Config
 
-Optional sampling overrides. `-1` = provider default for `temperature`,
+Optional sampling and request overrides. `-1` = provider default for `temperature`,
 `top_p`, `top_k`, `max_tokens`. `reasoning_effort` lives directly on LLM
-Chat / LLM Agent instead.
+Chat / LLM Agent instead. `timeout_seconds` defaults to 300 and limits each
+complete model request, including streaming; increase it for slow models.
+For the agent this applies separately to each model turn, not the entire run.
+An unconnected config also uses 300 seconds.
 
 ### LLM Unload
 

@@ -93,7 +93,8 @@ class LLMChat(io.ComfyNode):
             if max_tokens > 0:
                 api.execution.set_progress(text_len, max_tokens)
 
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=sampling.get("timeout_seconds", 300))
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             text, reasoning = await client.chat_stream(
                 session, base_url, api_key, payload, on_chunk,
                 should_interrupt=comfy.model_management.processing_interrupted,

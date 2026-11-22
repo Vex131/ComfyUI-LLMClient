@@ -116,7 +116,8 @@ class LLMAgent(io.ComfyNode):
             if max_tokens > 0:
                 api.execution.set_progress(text_len, max_tokens)
 
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=sampling.get("timeout_seconds", 300))
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             result = await agent.run_loop(
                 session, base_url, api_key, model_id, messages,
                 sampling=sampling,
