@@ -65,6 +65,26 @@ def generic_app():
 
 
 class ProbeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_probe_preserves_only_advertised_reasoning_modes(self):
+        app = web.Application()
+
+        async def models_handler(request):
+            return web.json_response({"data": [
+                {"id": "supported", "capabilities": {"reasoning_efforts": ["low", "medium", "high"]}},
+                {"id": "unknown"},
+                {"id": "invalid", "reasoning_efforts": "medium"},
+            ]})
+
+        app.router.add_get("/v1/models", models_handler)
+        async def run(session, base):
+            return await client.probe(session, base, "")
+
+        result = await _with_server(app, run)
+        by_id = {model["id"]: model for model in result["models"]}
+        self.assertEqual(by_id["supported"]["reasoning_efforts"], ["low", "medium", "high"])
+        self.assertEqual(by_id["unknown"]["reasoning_efforts"], [])
+        self.assertEqual(by_id["invalid"]["reasoning_efforts"], [])
+
     async def test_probe_llamacpp(self):
         async def run(session, base):
             return await client.probe(session, base, "")

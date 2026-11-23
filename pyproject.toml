@@ -3,7 +3,10 @@ name = "comfyui-llmclient"
 description = "OpenAI-compatible LLM client nodes for ComfyUI (any provider: llama.cpp, vLLM, NInfer, Strata, OpenAI)"
 version = "0.1.0"
 license = { text = "MIT" }
-dependencies = []
+dependencies = ["filelock>=3.13"]
+
+[project.optional-dependencies]
+rag = ["sentence-transformers>=3.4,<6", "pypdf>=5,<7", "python-docx>=1.1,<2"]
 
 [project.urls]
 Repository = "https://github.com/Vex131/ComfyUI-LLMClient"

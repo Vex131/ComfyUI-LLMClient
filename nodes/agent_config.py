@@ -1,4 +1,5 @@
 from comfy_api.latest import io
+from .rag import LLMRagConfigType
 
 LLMAgentConfigType = io.Custom("LLM_AGENT_CONFIG")
 
@@ -50,14 +51,17 @@ class LLMAgentConfig(io.ComfyNode):
                             "tools. native = require tool-calling support (llama.cpp --jinja, "
                             "vLLM --enable-auto-tool-choice). json = text protocol only.",
                 ),
-                io.Int.Input("max_iterations", default=18, min=1, max=64, advanced=True),
+                io.Int.Input("max_iterations", default=18, min=1, max=64, advanced=True,
+                             tooltip="Maximum model/tool rounds per agent run before requesting a final answer."),
+                LLMRagConfigType.Input("rag_config", optional=True,
+                                      tooltip="Connect LLM RAG Config when using documents."),
             ],
-            outputs=[LLMAgentConfigType.Output("agent_config")],
+            outputs=[LLMAgentConfigType.Output("agent_config", tooltip="Connect these instructions and tool settings to LLM Agent.")],
         )
 
     @classmethod
     def execute(cls, system_prompt, output_format, json_hint, assets_tool, web_tool, tool_mode,
-                max_iterations) -> io.NodeOutput:
+                max_iterations, rag_config=None) -> io.NodeOutput:
         return io.NodeOutput(
             {
                 "system_prompt": system_prompt,
@@ -67,5 +71,6 @@ class LLMAgentConfig(io.ComfyNode):
                 "web_tool": web_tool,
                 "tool_mode": tool_mode,
                 "max_iterations": max_iterations,
+                "rag_config": rag_config,
             }
         )

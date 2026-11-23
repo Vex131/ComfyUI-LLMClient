@@ -107,7 +107,15 @@ async def probe(session, base_url: str, api_key: str) -> dict:
         vision = capabilities.get("multimodal")
         if vision is None:
             vision = entry.get("multimodal")
-        models.append({"id": model_id, "vision": vision, "reasoning": None})
+        reasoning_modes = (capabilities.get("supported_reasoning_efforts")
+                           or capabilities.get("reasoning_efforts")
+                           or entry.get("supported_reasoning_efforts")
+                           or entry.get("reasoning_efforts"))
+        if not isinstance(reasoning_modes, list) or not all(isinstance(mode, str) and mode.strip()
+                                                            for mode in reasoning_modes):
+            reasoning_modes = []
+        models.append({"id": model_id, "vision": vision, "reasoning": None,
+                       "reasoning_efforts": list(dict.fromkeys(reasoning_modes))})
 
     profile = "generic"
     context = None
@@ -123,13 +131,13 @@ async def probe(session, base_url: str, api_key: str) -> dict:
 def build_chat_payload(model: str, messages: list, sampling: dict = None, seed: int = -1) -> dict:
     payload = {"model": model, "messages": messages}
     if sampling:
-        if sampling["temperature"] >= 0:
+        if sampling.get("temperature", -1) >= 0:
             payload["temperature"] = sampling["temperature"]
-        if sampling["top_p"] >= 0:
+        if sampling.get("top_p", -1) >= 0:
             payload["top_p"] = sampling["top_p"]
-        if sampling["top_k"] >= 0:
+        if sampling.get("top_k", -1) >= 0:
             payload["top_k"] = sampling["top_k"]
-        if sampling["max_tokens"] >= 0:
+        if sampling.get("max_tokens", -1) >= 0:
             payload["max_tokens"] = sampling["max_tokens"]
         if sampling.get("reasoning_effort"):
             payload["reasoning_effort"] = sampling["reasoning_effort"]

@@ -32,7 +32,8 @@ class LLMPatternExtract(io.ComfyNode):
                             "# are ignored.",
                 ),
             ],
-            outputs=[io.String.Output("field_{}".format(i + 1)) for i in range(MAX_FIELDS)],
+            outputs=[io.String.Output("field_{}".format(i + 1), tooltip="Extracted value for pattern {}.".format(i + 1))
+                     for i in range(MAX_FIELDS)],
         )
 
     @classmethod

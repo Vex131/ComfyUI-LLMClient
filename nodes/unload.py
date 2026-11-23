@@ -14,15 +14,18 @@ class LLMUnload(io.ComfyNode):
             display_name="LLM Unload",
             category="LLM Client",
             inputs=[
-                LLMProviderType.Input("model"),
+                LLMProviderType.Input("model", tooltip="Provider and model to control; supported operations depend on the server."),
                 io.Combo.Input(
                     "mode",
                     options=["offload_vram_to_ram", "release_all", "wake_up"],
                     default="offload_vram_to_ram",
+                    tooltip="Offload model weights, release model resources, or wake a sleeping provider.",
                 ),
-                io.String.Input("text", force_input=True, optional=True),
+                io.String.Input("text", force_input=True, optional=True,
+                                tooltip="Optional text to pass through after the unload operation."),
             ],
-            outputs=[io.String.Output("status"), io.String.Output("text")],
+            outputs=[io.String.Output("status", tooltip="Result of the provider operation."),
+                     io.String.Output("text", tooltip="The text passed into this node.")],
         )
 
     @classmethod

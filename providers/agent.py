@@ -5,6 +5,18 @@ import re
 from .client import _headers, build_chat_payload, normalize_root
 
 TOOL_SCHEMAS = {
+    "search_documents": {
+        "type": "function",
+        "function": {
+            "name": "search_documents",
+            "description": "Search the configured local documents semantically. Returns relevant passages and sources.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "Question or search query."}},
+                "required": ["query"],
+            },
+        },
+    },
     "list_local_models": {
         "type": "function",
         "function": {

@@ -2,7 +2,7 @@ import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 
 function getWidget(node, name) {
-    return node.widgets?.find((w) => w.name === name);
+    return node?.widgets?.find((w) => w.name === name);
 }
 
 function setButtonLabel(button, text) {
@@ -57,6 +57,7 @@ async function testConnection(node, button, prefix) {
         console.error("LLM Client connection test failed:", error);
         setButtonLabel(button, prefix + ": FAILED");
     }
+    window.dispatchEvent(new Event("llmclient-provider-changed"));
     node.setDirtyCanvas(true, true);
 }
 
@@ -72,6 +73,386 @@ app.registerExtension({
         node.addWidget("button", "api_keys", "Manage API Keys", () =>
             openApiKeys(getWidget(node, "base_url")?.value ?? "")
         );
+        for (const name of ["base_url", "model"]) {
+            const widget = getWidget(node, name);
+            if (!widget) continue;
+            const original = widget.callback;
+            widget.callback = function (...args) {
+                const result = original?.apply(this, args);
+                window.dispatchEvent(new Event("llmclient-provider-changed"));
+                return result;
+            };
+        }
+    },
+});
+
+app.registerExtension({
+    name: "LLMClient.ReasoningModes",
+    nodeCreated(node) {
+        if (!["LLMChat", "LLMAgent"].includes(node.comfyClass)) return;
+        let selector;
+        let sequence = 0;
+        const reasoningField = getWidget(node, "reasoning_effort");
+        if (reasoningField) {
+            const oldCallback = reasoningField.callback;
+            reasoningField.callback = function (...args) {
+                const result = oldCallback?.apply(this, args);
+                if (selector?.options?.values?.includes(reasoningField.value)) {
+                    selector.value = reasoningField.value;
+                }
+                return result;
+            };
+        }
+        const refresh = async () => {
+            const current = ++sequence;
+            const input = node.inputs?.find(item => item.name === "model");
+            const link = input?.link != null ? node.graph?.links?.[input.link] : null;
+            const provider = link && node.graph?.getNodeById(link.origin_id);
+            const base_url = getWidget(provider, "base_url")?.value;
+            const model = getWidget(provider, "model")?.value;
+            let modes = [];
+            if (base_url && model) {
+                try {
+                    const response = await api.fetchApi("/llmclient/reasoning-options", {
+                        method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ base_url, model }),
+                    });
+                    if (response.ok) modes = (await response.json()).modes || [];
+                } catch (error) {
+                    console.warn("Unable to load reasoning modes:", error);
+                }
+            }
+            if (current !== sequence) return;
+            const field = getWidget(node, "reasoning_effort");
+            if (!field) return;
+            if (!modes.length) {
+                if (selector) {
+                    const index = node.widgets.indexOf(selector);
+                    if (index !== -1) node.widgets.splice(index, 1);
+                    selector = undefined;
+                }
+            } else {
+                const selected = modes.includes(field.value) ? field.value :
+                    (modes.includes("medium") ? "medium" : modes[0]);
+                field.value = selected;
+                if (!selector) {
+                    selector = node.addWidget("combo", "provider_reasoning_modes", selected, value => {
+                        field.value = value;
+                        field.callback?.(value);
+                    }, { values: modes });
+                    selector.serialize = false;
+                } else {
+                    selector.options.values = modes;
+                    selector.value = selected;
+                }
+            }
+            node.setDirtyCanvas(true, true);
+        };
+        const original = node.onConnectionsChange;
+        node.onConnectionsChange = function (...args) {
+            const result = original?.apply(this, args);
+            refresh();
+            return result;
+        };
+        const previousConfigure = node.onConfigure;
+        node.onConfigure = function (...args) {
+            const result = previousConfigure?.apply(this, args);
+            setTimeout(refresh, 0);
+            return result;
+        };
+        window.addEventListener("llmclient-provider-changed", refresh);
+        const previousRemoved = node.onRemoved;
+        node.onRemoved = function (...args) {
+            window.removeEventListener("llmclient-provider-changed", refresh);
+            return previousRemoved?.apply(this, args);
+        };
+        setTimeout(refresh, 0);
+    },
+});
+
+app.registerExtension({
+    name: "LLMClient.ModelConfigLayout",
+    nodeCreated(node) {
+        if (node.comfyClass !== "LLMModelConfig") return;
+        const widgets = node.widgets || [];
+        const context = getWidget(node, "max_context");
+        const timeout = getWidget(node, "timeout_seconds");
+        const from = widgets.indexOf(context), to = widgets.indexOf(timeout);
+        if (from >= 0 && to >= 0 && from > to) {
+            widgets.splice(from, 1);
+            widgets.splice(to, 0, context);
+        }
+        const configured = node.onConfigure;
+        node.onConfigure = function (info, ...args) {
+            const result = configured?.call(this, info, ...args);
+            if (!info?.properties?.llmclient_model_config_layout && Array.isArray(info?.widgets_values)) {
+                const named = info.widgets_values_named;
+                const oldTimeout = named?.timeout_seconds ?? info.widgets_values[4];
+                const oldContext = named?.max_context ?? info.widgets_values[5] ?? -1;
+                if (timeout && typeof oldTimeout === "number") timeout.value = oldTimeout;
+                if (context && typeof oldContext === "number") context.value = oldContext;
+            }
+            node.properties ||= {};
+            node.properties.llmclient_model_config_layout = 2;
+            return result;
+        };
+        node.properties ||= {};
+        node.properties.llmclient_model_config_layout = 2;
+    },
+});
+
+app.registerExtension({
+    name: "LLMClient.Sessions",
+    nodeCreated(node) {
+        if (!["LLMChat", "LLMAgent"].includes(node.comfyClass)) return;
+        if (node._llmSessionWidgetInstalled) return;
+        const memory = getWidget(node, "memory");
+        const session = getWidget(node, "sessions");
+        if (!memory || !session) return;
+        node._llmSessionWidgetInstalled = true;
+        const randomId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)),
+                                          value => value.toString(16).padStart(2, "0")).join("");
+        const valid = value => /^[0-9a-f]{32}:[0-9a-f]{32}$/.test(value || "");
+        session.type = "hidden";
+        session.computeSize = () => [0, -4];
+        const ensureSession = () => {
+            if (!valid(session.value)) session.value = randomId() + ":" + randomId();
+            const owner = session.value.split(":")[0];
+            const nodes = node.graph?._nodes || [];
+            const index = nodes.indexOf(node);
+            const duplicate = index >= 0 && nodes.slice(0, index).some(other =>
+                ["LLMChat", "LLMAgent"].includes(other.comfyClass)
+                && getWidget(other, "sessions")?.value?.startsWith(owner + ":"));
+            if (duplicate) session.value = randomId() + ":" + randomId();
+        };
+        const newSession = "New session...";
+        let entries = [];
+        let names = new Map();
+        let refreshVersion = 0;
+        let menuVersion = 0;
+        let closeMenu = () => {};
+        const label = value => names.get(value) || newSession;
+        const updateNames = () => {
+            const counts = new Map();
+            names = new Map();
+            for (const item of entries) {
+                if (!item.saved) continue;
+                const stamp = new Date(item.created_at * 1000).toISOString();
+                counts.set(stamp, (counts.get(stamp) || 0) + 1);
+            }
+            for (const item of entries) {
+                if (!item.saved) continue;
+                const stamp = new Date(item.created_at * 1000).toISOString();
+                names.set(item.id, counts.get(stamp) > 1 ? `${stamp} | ${item.id.split(":")[1]}` : stamp);
+            }
+        };
+        const setOptions = () => {
+            updateNames();
+            selector.options.values = [newSession, ...entries.filter(item => item.saved).map(item => label(item.id))];
+            selector.value = label(session.value);
+        };
+        const localEntry = id => ({ id, saved: false, updated_at: Number.MAX_SAFE_INTEGER });
+        const selector = node.addWidget("combo", "session_menu", "", value => {
+            if (!memory.value) return;
+            if (value === newSession) {
+                session.value = session.value.split(":")[0] + ":" + randomId();
+                entries = entries.filter(item => item.saved);
+                entries.unshift(localEntry(session.value));
+                setOptions();
+            } else {
+                const selected = entries.find(item => label(item.id) === value);
+                if (!selected) {
+                    selector.value = label(session.value);
+                    return;
+                }
+                session.value = selected.id;
+            }
+            session.callback?.(session.value);
+            selector.value = label(session.value);
+            refresh();
+            node.setDirtyCanvas(true, true);
+        }, { values: [], serialize: false });
+        selector.computeSize = () => [0, 20];
+        selector.type = memory.value ? "combo" : "hidden";
+        node.addCustomWidget({
+            name: "session_layout_space",
+            type: "custom",
+            value: null,
+            options: { serialize: false },
+            computeSize: () => [0, memory.value ? -4 : 20],
+            draw() {},
+        });
+        const refresh = async () => {
+            if (!memory.value || !valid(session.value)) return;
+            const selected = session.value;
+            const version = ++refreshVersion;
+            try {
+                const response = await api.fetchApi("/llmclient/sessions", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ kind: node.comfyClass === "LLMChat" ? "chat" : "agent",
+                                           session: selected }),
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || "HTTP " + response.status);
+                if (version !== refreshVersion || session.value !== selected) return;
+                entries = (data.sessions || []).filter(item => valid(item.id)
+                    && Number.isFinite(item.created_at) && item.created_at > 0 && item.created_at < 253402300800
+                    && Number.isFinite(item.updated_at)).map(item => ({ ...item, saved: true }));
+                if (!entries.some(item => item.id === selected)) {
+                    entries.unshift(localEntry(selected));
+                }
+                entries.sort((a, b) => b.updated_at - a.updated_at || b.id.localeCompare(a.id));
+                setOptions();
+                node.setDirtyCanvas(true, true);
+            } catch (error) {
+                console.warn("Unable to load sessions:", error);
+                if (version === refreshVersion && session.value === selected) {
+                    if (!entries.some(item => item.id === selected)) {
+                        entries = [localEntry(selected)];
+                    }
+                    setOptions();
+                }
+            }
+        };
+        const openMenu = async event => {
+            if (!memory.value) return;
+            const version = ++menuVersion;
+            closeMenu();
+            await refresh();
+            if (version !== menuVersion || !memory.value || !node.graph) return;
+            const menu = document.createElement("div");
+            menu.className = "litecontextmenu llmclient-session-menu";
+            Object.assign(menu.style, {
+                position: "fixed", zIndex: "10000", minWidth: "300px",
+                maxWidth: "calc(100vw - 16px)", maxHeight: "min(400px, calc(100vh - 16px))",
+                overflowY: "auto", left: `${Math.max(8, Math.min(event.clientX, window.innerWidth - 310))}px`,
+                top: `${Math.max(8, Math.min(event.clientY, window.innerHeight - 200))}px`,
+                background: "var(--comfy-menu-bg, #242424)", color: "var(--fg-color, #eee)",
+                border: "1px solid var(--border-color, #555)", borderRadius: "6px",
+                boxShadow: "0 6px 20px #0008", padding: "4px",
+            });
+            menu.setAttribute("role", "menu");
+            const close = () => {
+                document.removeEventListener("pointerdown", outside, true);
+                document.removeEventListener("keydown", keydown, true);
+                menu.remove();
+                if (closeMenu === close) closeMenu = () => {};
+            };
+            const outside = e => { if (!menu.contains(e.target)) close(); };
+            const keydown = e => { if (e.key === "Escape") close(); };
+            closeMenu = close;
+            const filter = document.createElement("input");
+            filter.type = "search";
+            filter.placeholder = "Filter sessions";
+            filter.setAttribute("aria-label", "Filter sessions");
+            Object.assign(filter.style, { width: "100%", boxSizing: "border-box", marginBottom: "4px",
+                                           background: "var(--comfy-input-bg, #222)", color: "inherit" });
+            const filterRows = [];
+            filter.oninput = () => {
+                const query = filter.value.trim().toLowerCase();
+                for (const item of filterRows) {
+                    item.row.style.display = item.text.toLowerCase().includes(query) ? "flex" : "none";
+                }
+            };
+            menu.append(filter);
+            const addRow = (text, callback, entry) => {
+                const row = document.createElement("div");
+                row.className = "litemenu-entry";
+                Object.assign(row.style, { display: "flex", alignItems: "center", gap: "8px" });
+                row.onmouseenter = () => { row.style.background = "var(--comfy-input-bg, #333)"; };
+                row.onmouseleave = () => { row.style.background = ""; };
+                const choose = document.createElement("button");
+                choose.type = "button";
+                choose.textContent = text;
+                Object.assign(choose.style, { flex: "1", textAlign: "left", background: "transparent",
+                                               color: "inherit", border: "0", cursor: "pointer" });
+                choose.onclick = () => { close(); callback(); };
+                row.append(choose);
+                if (entry?.saved) {
+                    const remove = document.createElement("button");
+                    remove.type = "button";
+                    remove.textContent = "×";
+                    remove.title = "Delete session";
+                    remove.setAttribute("aria-label", `Delete session ${text}`);
+                    Object.assign(remove.style, { background: "transparent", color: "inherit",
+                                                   border: "0", cursor: "pointer", fontSize: "18px" });
+                    remove.onclick = async e => {
+                        e.stopPropagation();
+                        if (!confirm(`Permanently delete session ${text}? This cannot be undone.`)) return;
+                        remove.disabled = true;
+                        try {
+                            const response = await api.fetchApi("/llmclient/sessions/delete", {
+                                method: "POST", headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ kind: node.comfyClass === "LLMChat" ? "chat" : "agent",
+                                                       session: session.value, target: entry.id }),
+                            });
+                            const data = await response.json();
+                            if (!response.ok) throw new Error(data.error || "HTTP " + response.status);
+                            close();
+                            entries = entries.filter(item => item.id !== entry.id);
+                            if (session.value === entry.id) selector.callback(newSession);
+                            else { setOptions(); node.setDirtyCanvas(true, true); }
+                        } catch (error) {
+                            remove.disabled = false;
+                            alert("Unable to delete session: " + error.message);
+                        }
+                    };
+                    row.append(remove);
+                }
+                menu.append(row);
+                if (entry) filterRows.push({ row, text });
+            };
+            addRow(newSession, () => selector.callback(newSession));
+            for (const entry of entries.filter(item => item.saved)) {
+                const name = label(entry.id);
+                addRow(name, () => selector.callback(name), entry);
+            }
+            document.body.append(menu);
+            document.addEventListener("pointerdown", outside, true);
+            document.addEventListener("keydown", keydown, true);
+            filter.focus();
+        };
+        selector.onPointerDown = pointer => {
+            if (!memory.value) return false;
+            pointer.onClick = () => openMenu(pointer.eDown);
+            return true;
+        };
+        const update = () => {
+            if (memory.value) {
+                ensureSession();
+                if (!entries.some(item => item.id === session.value)) {
+                    entries = [localEntry(session.value)];
+                }
+                setOptions();
+                refresh();
+            } else {
+                ++refreshVersion;
+                ++menuVersion;
+                closeMenu();
+            }
+            selector.type = memory.value ? "combo" : "hidden";
+            node.setDirtyCanvas(true, true);
+        };
+        const previous = memory.callback;
+        memory.callback = function (...args) {
+            const result = previous?.apply(this, args);
+            update();
+            return result;
+        };
+        const configured = node.onConfigure;
+        node.onConfigure = function (...args) {
+            const result = configured?.apply(this, args);
+            setTimeout(update, 0);
+            return result;
+        };
+        const removed = node.onRemoved;
+        node.onRemoved = function (...args) {
+            ++refreshVersion;
+            ++menuVersion;
+            closeMenu();
+            return removed?.apply(this, args);
+        };
+        setTimeout(update, 0);
     },
 });
 
@@ -346,6 +727,130 @@ app.registerExtension({
         { id: "LLMClient.Vault", title: "LLM API Keys", type: "custom",
           render: (el) => el.replaceChildren(renderApiKeys()) },
     ],
+});
+
+app.registerExtension({
+    name: "LLMClient.LoadDocuments",
+    nodeCreated(node) {
+        if (node.comfyClass !== "LLMLoadDocuments") return;
+        const input = document.createElement("input");
+        input.type = "file";
+        input.multiple = true;
+        input.accept = ".pdf,.docx,.txt,.md,.json,.csv,.tsv,.xml,.html,.yaml,.yml,.log";
+        const folderInput = document.createElement("input");
+        folderInput.type = "file";
+        folderInput.multiple = true;
+        folderInput.setAttribute("webkitdirectory", "");
+        const upload = async (picker) => {
+            const supported = /\.(pdf|docx|txt|md|json|csv|tsv|xml|html|yaml|yml|log)$/i;
+            const files = Array.from(picker.files || []).filter(file => supported.test(file.name));
+            if (!files.length) return;
+            if (files.length > 500 || files.some((file) => file.size > 20 * 1024 * 1024)) {
+                alert("Choose at most 500 documents, each no larger than 20 MB.");
+                return;
+            }
+            try {
+                const id = Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16)).join("-");
+                const folder = `llm_documents/${id}`;
+                for (const file of files) {
+                    const relative = file.webkitRelativePath || file.name;
+                    const segments = relative.split("/");
+                    if (segments.some(part => !part || part === "." || part === ".." || part.includes("\\"))) {
+                        throw new Error("Invalid folder entry.");
+                    }
+                    const filename = segments.pop();
+                    const form = new FormData();
+                    form.append("image", file, filename);
+                    form.append("type", "input");
+                    form.append("subfolder", [folder, ...segments].join("/"));
+                    const response = await api.fetchApi("/upload/image", { method: "POST", body: form });
+                    if (!response.ok) throw new Error("HTTP " + response.status);
+                }
+                const widget = getWidget(node, "document_path");
+                if (!widget) throw new Error("Document path input not found.");
+                widget.value = `input:${folder}`;
+                widget.callback?.(widget.value);
+                node.setDirtyCanvas(true, true);
+            } catch (error) {
+                alert("Document upload failed: " + error.message);
+            } finally {
+                picker.value = "";
+            }
+        };
+        input.onchange = () => upload(input);
+        folderInput.onchange = () => upload(folderInput);
+        node.addWidget("button", "upload_document", "Choose document to upload", () => input.click());
+        node.addWidget("button", "upload_folder", "Choose folder to upload", () => folderInput.click());
+    },
+});
+
+app.registerExtension({
+    name: "LLMClient.RagConfig",
+    nodeCreated(node) {
+        if (node.comfyClass !== "LLMRagConfig") return;
+        const restoreSelection = async () => {
+            const widget = getWidget(node, "embedding_model");
+            if (!widget || typeof widget.value !== "string") return;
+            const selected = widget.value;
+            try {
+                const response = await api.fetchApi("/llmclient/embedding-models");
+                if (!response.ok) return;
+                const data = await response.json();
+                const current = data.aliases?.[selected];
+                if (current && current !== selected && widget.value === selected) {
+                    widget.value = current;
+                    widget.callback?.(current);
+                    node.setDirtyCanvas(true, true);
+                }
+            } catch (error) {
+                console.warn("Unable to refresh embedding model selection:", error);
+            }
+        };
+        const previousConfigure = node.onConfigure;
+        node.onConfigure = function (...args) {
+            const result = previousConfigure?.apply(this, args);
+            setTimeout(restoreSelection, 0);
+            return result;
+        };
+        setTimeout(restoreSelection, 0);
+        const button = node.addWidget("button", "download_embedding", "Download selected embedding model", async () => {
+            const value = getWidget(node, "embedding_model")?.value;
+            const model = typeof value === "string" ? value : value?.embedding_model;
+            if (!model || model === "Local path / local model" || model.startsWith("Installed: ")) {
+                alert("Select a downloadable embedding model preset first.");
+                return;
+            }
+            if (!confirm(`Download ${model} to ComfyUI's models/llm_embeddings folder?`)) return;
+            const downloadId = Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16)).join("-");
+            const onProgress = event => {
+                const data = event.detail;
+                if (data?.download_id !== downloadId) return;
+                const mb = (data.downloaded / 1000000).toFixed(1);
+                const total = data.total ? ` / ${(data.total / 1000000).toFixed(1)} MB` : " MB";
+                setButtonLabel(button, `Downloading: ${mb}${total}`);
+                node.setDirtyCanvas(true, true);
+            };
+            api.addEventListener("llmclient-download-progress", onProgress);
+            setButtonLabel(button, "Starting download...");
+            node.setDirtyCanvas(true, true);
+            try {
+                const response = await api.fetchApi("/llmclient/embedding-models/download", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ model, client_id: api.clientId, download_id: downloadId }),
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || "HTTP " + response.status);
+                alert("Embedding model downloaded to " + result.path + ". Refresh the browser to see its status in the menu.");
+            } catch (error) {
+                alert("Embedding model download failed: " + error.message);
+            } finally {
+                api.removeEventListener("llmclient-download-progress", onProgress);
+                setButtonLabel(button, "Download selected embedding model");
+                node.setDirtyCanvas(true, true);
+            }
+        });
+    },
 });
 
 function parsePatternLabels(text) {

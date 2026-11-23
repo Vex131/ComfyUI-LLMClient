@@ -8,6 +8,7 @@ from .nodes.chat import LLMChat
 from .nodes.config import LLMModelConfig
 from .nodes.extract import LLMPatternExtract
 from .nodes.provider import LLMProvider
+from .nodes.rag import LoadDocuments, LLMRagConfig
 from .nodes.unload import LLMUnload
 
 WEB_DIRECTORY = "web"
@@ -25,6 +26,8 @@ class LLMClientExtension(ComfyExtension):
             LLMModelConfig,
             LLMChat,
             LLMAgentConfig,
+            LoadDocuments,
+            LLMRagConfig,
             LLMAgent,
             LLMPatternExtract,
             LLMUnload,

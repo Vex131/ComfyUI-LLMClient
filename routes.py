@@ -1,4 +1,6 @@
 import os
+import asyncio
+import time
 
 import aiohttp
 from aiohttp import web
@@ -6,13 +8,82 @@ from server import PromptServer
 from urllib.parse import urlsplit
 
 from . import config
-from .providers import client, credstore, websearch
+from .providers import client, credstore, memory, rag, websearch
 
 _MAX_API_KEY_LEN = 512
 _SEARCH_ID = "search.tavily_api_key"
 _SEARXNG_ID = "search.searxng_url"
 _LLM_PREFIX = "llm."
 _LLM_NAME_PREFIX = "llm-name."
+
+
+@PromptServer.instance.routes.post("/llmclient/sessions")
+async def list_sessions(request: web.Request) -> web.Response:
+    body = await request.json()
+    try:
+        identifier = body.get("session", "")
+        names = memory.list_sessions(body.get("kind", ""), identifier)
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.json_response({"sessions": names})
+
+
+@PromptServer.instance.routes.post("/llmclient/sessions/delete")
+async def delete_session(request: web.Request) -> web.Response:
+    body = await request.json()
+    try:
+        await memory.delete_session(body.get("kind", ""), body.get("session", ""),
+                                    body.get("target", ""))
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except FileNotFoundError as exc:
+        return web.json_response({"error": str(exc)}, status=404)
+    except OSError:
+        return web.json_response({"error": "Could not delete the session file."}, status=500)
+    return web.json_response({"ok": True})
+
+
+@PromptServer.instance.routes.get("/llmclient/embedding-models")
+async def embedding_models(request: web.Request) -> web.Response:
+    return web.json_response({"models": rag.model_options(), "aliases": rag.model_aliases()})
+
+
+@PromptServer.instance.routes.post("/llmclient/embedding-models/download")
+async def download_embedding_model(request: web.Request) -> web.Response:
+    body = await request.json()
+    selection = body.get("model", "")
+    if isinstance(selection, str) and selection.startswith(rag.DOWNLOADED_PREFIX):
+        selection = selection[len(rag.DOWNLOADED_PREFIX):]
+    if isinstance(selection, str) and selection.endswith(rag.DOWNLOADED_SUFFIX):
+        selection = selection[:-len(rag.DOWNLOADED_SUFFIX)]
+    if selection not in rag.PRESET_MODELS:
+        return web.json_response({"error": "Choose a downloadable model preset."}, status=400)
+    repo = rag.PRESET_MODELS[selection]
+    destination = rag.model_root() / repo.split("/")[-1]
+    try:
+        from huggingface_hub import snapshot_download
+        from huggingface_hub.utils import tqdm as hub_tqdm
+        client_id = body.get("client_id")
+        download_id = body.get("download_id")
+
+        class DownloadProgress(hub_tqdm):
+            def update(self, n=1):
+                result = super().update(n)
+                now = time.monotonic()
+                if (self.unit == "B" and isinstance(client_id, str) and isinstance(download_id, str)
+                        and now - getattr(self, "_last_notice", 0) >= 0.2):
+                    self._last_notice = now
+                    PromptServer.instance.send_sync("llmclient-download-progress", {
+                        "download_id": download_id, "downloaded": self.n, "total": self.total or 0,
+                    }, sid=client_id)
+                return result
+
+        await asyncio.to_thread(snapshot_download, repo_id=repo, local_dir=str(destination),
+                                allow_patterns=["*.json", "*.txt", "*.model", "*.safetensors"],
+                                tqdm_class=DownloadProgress)
+    except Exception as exc:
+        return web.json_response({"error": "Model download failed: {}".format(exc)}, status=500)
+    return web.json_response({"path": str(destination), "models": rag.model_options()})
 
 
 @PromptServer.instance.routes.post("/llmclient/test")
@@ -32,6 +103,17 @@ async def test_connection(request: web.Request) -> web.Response:
     if result["ok"]:
         config.update_cache(base_url, result["profile"], result["models"], context=result.get("context"))
     return web.json_response(result)
+
+
+@PromptServer.instance.routes.post("/llmclient/reasoning-options")
+async def reasoning_options(request: web.Request) -> web.Response:
+    body = await request.json()
+    base_url, model_id = body.get("base_url"), body.get("model")
+    if not isinstance(base_url, str) or not isinstance(model_id, str):
+        return web.json_response({"modes": []})
+    models = config.cached_models(base_url)
+    model = next((entry for entry in models if entry.get("id") == model_id), {})
+    return web.json_response({"modes": model.get("reasoning_efforts") or []})
 
 
 def _entry_state(secret_id: str) -> dict:

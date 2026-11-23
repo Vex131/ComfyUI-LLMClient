@@ -27,11 +27,11 @@ class LLMProvider(io.ComfyNode):
                     "model",
                     options=models,
                     default=models[0],
-                    tooltip="Use the Test Connection button to refresh.",
+                    tooltip="Model sent to this provider. Use Test Connection to refresh the list.",
                 ),
             ],
             outputs=[
-                LLMProviderType.Output("model"),
+                LLMProviderType.Output("model", tooltip="Connect the provider and selected model to Chat, Agent or Unload."),
             ],
         )
 
