@@ -12,11 +12,14 @@ test("API key manager handles providers, storage status and optional search", as
             this.value = "";
             this.textContent = "";
             this.attributes = {};
+            this.listeners = {};
         }
         append(...items) { this.children.push(...items); }
         replaceChildren(...items) { this.children = items; }
-        addEventListener() {}
+        addEventListener(name, callback) { this.listeners[name] = callback; }
         setAttribute(name, value) { this.attributes[name] = value; }
+        getBoundingClientRect() { return { left: 10, right: 100, top: 10, bottom: 100 }; }
+        close() { this.closed = true; }
         focus() {}
         showModal() {}
     }
@@ -54,6 +57,18 @@ test("API key manager handles providers, storage status and optional search", as
     const document = { createElement: (tag) => new Element(tag), body: new Element("body") };
     const source = fs.readFileSync("web/llmclient.js", "utf8").replace(/^import .*;\r?\n/gm, "");
     vm.runInNewContext(source, { app, api, document, console });
+    const provider = registrations.find((item) => item.name === "LLMClient.Provider");
+    const widgets = [];
+    provider.nodeCreated({
+        comfyClass: "LLMProvider", widgets,
+        addWidget: (type, name, value, callback) => { const widget = { name, value, callback }; widgets.push(widget); return widget; },
+    });
+    widgets.find((widget) => widget.name === "api_keys").callback();
+    const dialog = document.body.children[0];
+    dialog.listeners.click({ target: dialog, clientX: 50, clientY: 50 });
+    assert.notEqual(dialog.closed, true);
+    dialog.listeners.click({ target: dialog, clientX: 5, clientY: 50 });
+    assert.equal(dialog.closed, true);
     const vault = registrations.find((item) => item.name === "LLMClient.Vault");
     const panel = new Element("div");
     vault.bottomPanelTabs[0].render(panel);
@@ -65,6 +80,8 @@ test("API key manager handles providers, storage status and optional search", as
     assert.ok(find("API key storage: encrypted Windows file"));
     assert.ok(find("Preferred storage unavailable: win-credential-manager: CredWriteW failed: 1312") === undefined);
     assert.ok(all(root).some((element) => element.textContent.includes("CredWriteW failed")));
+    assert.equal(find("Remove Tavily API key").hidden, true);
+    assert.equal(find("Remove SearXNG URL").hidden, true);
     inputs[0].value = "First provider";
     inputs[1].value = "https://one.example/v1";
     inputs[2].value = "first-key";
@@ -81,15 +98,23 @@ test("API key manager handles providers, storage status and optional search", as
     await find("Save Tavily API key").onclick();
     assert.equal(search, "search-key");
     assert.equal(inputs[3].value, "");
+    assert.ok(find("Tavily API key saved"));
+    assert.ok(find("Replace Tavily API key"));
+    assert.equal(find("Remove Tavily API key").hidden, false);
     await find("Remove Tavily API key").onclick();
     assert.equal(search, "");
+    assert.equal(find("Remove Tavily API key").hidden, true);
+    assert.ok(find("Save Tavily API key"));
     inputs[4].value = "http://localhost:8888";
     await find("Save SearXNG URL").onclick();
     assert.equal(searxng, "http://localhost:8888");
     assert.ok(find("SearXNG URL saved."));
+    assert.equal(find("Remove SearXNG URL").hidden, false);
+    assert.ok(find("Update SearXNG URL"));
     await find("Remove SearXNG URL").onclick();
     assert.equal(searxng, "");
     assert.ok(find("No SearXNG URL configured."));
+    assert.equal(find("Remove SearXNG URL").hidden, true);
     const remove = all(root).find((element) =>
         element.attributes["aria-label"] === "Remove API key for https://one.example/v1");
     await remove.onclick();

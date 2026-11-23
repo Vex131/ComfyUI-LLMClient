@@ -178,6 +178,8 @@ function renderApiKeys(baseUrl = "") {
     const searchInput = input("password", "Enter Tavily API key", "Tavily API key");
     const searchSave = button("Save Tavily API key");
     const searchDelete = button("Remove Tavily API key");
+    searchDelete.hidden = true;
+    searchStatus.setAttribute("aria-live", "polite");
     const searchActions = element("div", "", "display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;");
     searchActions.append(searchSave, searchDelete);
     const searxTitle = element("h3", "SearXNG", "margin:18px 0 8px;font-size:15px;");
@@ -186,6 +188,8 @@ function renderApiKeys(baseUrl = "") {
     const searxInput = input("url", "http://127.0.0.1:8888", "SearXNG server URL");
     const searxSave = button("Save SearXNG URL");
     const searxDelete = button("Remove SearXNG URL");
+    searxDelete.hidden = true;
+    searxStatus.setAttribute("aria-live", "polite");
     const searxActions = element("div", "", "display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;");
     searxActions.append(searxSave, searxDelete);
     search.append(searchTitle, fallbackHelp, searchHelp, searchStatus, searchInput, searchActions,
@@ -208,12 +212,24 @@ function renderApiKeys(baseUrl = "") {
                 status.fallback_reason ? "Preferred storage unavailable: " + status.fallback_reason : "",
             ].filter(Boolean).join("\n");
             notices.textContent = (status.notices || []).join("\n");
-            searchStatus.textContent = status.search?.set ? "Tavily API key saved." : "No Tavily API key saved.";
+            const tavilySaved = !!status.search?.set;
+            searchStatus.textContent = tavilySaved ? "Tavily API key saved" : "No Tavily API key saved.";
+            searchStatus.style.cssText = tavilySaved
+                ? "font-size:12px;opacity:.8;line-height:1.5;"
+                : muted;
+            searchInput.placeholder = tavilySaved ? "Enter a new Tavily API key to replace it" : "Enter Tavily API key";
+            searchSave.textContent = tavilySaved ? "Replace Tavily API key" : "Save Tavily API key";
+            searchDelete.hidden = !tavilySaved;
             searchDelete.disabled = !status.search?.set;
             searxInput.value = status.search?.searxng_url || "";
             searxStatus.textContent = status.search?.searxng_url ? "SearXNG URL saved."
                 : status.search?.searxng_env ? "Using SearXNG URL from the environment."
                 : "No SearXNG URL configured.";
+            searxStatus.style.cssText = status.search?.searxng_url
+                ? "font-size:12px;opacity:.8;line-height:1.5;"
+                : muted;
+            searxSave.textContent = status.search?.searxng_url ? "Update SearXNG URL" : "Save SearXNG URL";
+            searxDelete.hidden = !status.search?.searxng_url;
             searxDelete.disabled = !status.search?.searxng_url;
             list.replaceChildren();
             for (const entry of status.llm || []) {
@@ -312,6 +328,13 @@ function openApiKeys(baseUrl) {
     close.style.cssText = "margin:0 20px 20px;padding:7px 14px;border-radius:6px;cursor:pointer;";
     close.onclick = () => dialog.close();
     dialog.append(renderApiKeys(baseUrl), close);
+    dialog.addEventListener("click", (event) => {
+        const bounds = dialog.getBoundingClientRect();
+        if (event.target === dialog && (event.clientX < bounds.left || event.clientX > bounds.right ||
+            event.clientY < bounds.top || event.clientY > bounds.bottom)) {
+            dialog.close();
+        }
+    });
     dialog.addEventListener("close", () => dialog.remove(), { once: true });
     document.body.append(dialog);
     dialog.showModal();
