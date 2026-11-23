@@ -4,9 +4,11 @@ import aiohttp
 import comfy.model_management
 from comfy_api.latest import ComfyAPISync, io
 
-from ..providers import agent, webfetch, websearch
+from .. import config
+from ..providers import agent, client, webfetch, websearch
 from . import assets
 from .agent_config import LLMAgentConfigType
+from .chat import _image_data_url
 from .config import LLMModelConfigType
 from .provider import LLMProviderType
 
@@ -45,6 +47,11 @@ class LLMAgent(io.ComfyNode):
                                 tooltip="The task for the agent"),
                 LLMModelConfigType.Input("model_config", optional=True,
                                          tooltip="Unconnected = provider defaults"),
+                io.Image.Input("image", optional=True),
+                io.Combo.Input(
+                    "vision", options=["auto", "yes", "no"], default="auto", advanced=True,
+                    tooltip="Override vision detection for this model",
+                ),
                 io.String.Input(
                     "reasoning_effort",
                     default="",
@@ -66,9 +73,9 @@ class LLMAgent(io.ComfyNode):
 
     @classmethod
     async def execute(cls, model, prompt, agent_config=None, model_config=None, reasoning_effort="",
-                      seed=-1) -> io.NodeOutput:
+                      seed=-1, image=None, vision="auto") -> io.NodeOutput:
         base_url = model["base_url"]
-        api_key = model.get("api_key", "")
+        api_key = client.resolve_key(base_url)
         model_id = model["model"]
 
         cfg = dict(DEFAULT_AGENT_CONFIG)
@@ -84,7 +91,21 @@ class LLMAgent(io.ComfyNode):
                     system += " Required keys: {}.".format(keys)
 
         messages = [{"role": "system", "content": system}]
-        messages.append({"role": "user", "content": prompt})
+        content = prompt
+        if image is not None:
+            if vision == "no":
+                raise ValueError("Vision override is set to 'no' but an image is connected.")
+            if vision == "auto":
+                for entry in config.cached_models(base_url):
+                    if entry.get("id") == model_id and entry.get("vision") is False:
+                        raise ValueError(
+                            "Selected model '{}' does not support image input. Set the vision override to 'yes' to force it.".format(model_id)
+                        )
+            content = [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": _image_data_url(image[0])}},
+            ]
+        messages.append({"role": "user", "content": content})
 
         def list_tool(args, session):
             return assets.list_assets(args.get("category", "all"))

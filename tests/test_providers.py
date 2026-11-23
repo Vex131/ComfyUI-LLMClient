@@ -1,7 +1,9 @@
 import asyncio
+import importlib
 import json
 import os
 import sys
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -13,9 +15,12 @@ import aiohttp
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
+os.environ["COMFYUI_LLMCLIENT_BACKEND"] = "file"
+os.environ["COMFYUI_LLMCLIENT_FILE_DIR"] = tempfile.mkdtemp(prefix="llmclient-test-vault-")
+
 with patch.dict(sys.modules, {"folder_paths": SimpleNamespace(get_user_directory=lambda: "test-user")}):
     import config
-from providers import client
+from providers import client, credstore
 
 
 async def _with_server(app, coro):
@@ -125,6 +130,76 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
         result = await _with_server(app, run)
         self.assertEqual(result["profile"], "vllm")
 
+    async def test_probe_refuses_redirects_for_credentialed_requests(self):
+        app = web.Application()
+
+        async def models_handler(request):
+            raise web.HTTPFound("http://127.0.0.1:1/elsewhere")
+
+        app.router.add_get("/v1/models", models_handler)
+
+        async def run(session, base):
+            with self.assertRaises(RuntimeError) as ctx:
+                await client.probe(session, base, "secret-key")
+            self.assertIn("not followed for credentialed requests", str(ctx.exception))
+
+        await _with_server(app, run)
+
+
+class ResolveKeyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="llmclient-vault-")
+        os.environ["COMFYUI_LLMCLIENT_FILE_DIR"] = self.tmp
+        importlib.reload(credstore)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_vault_key_used(self):
+        credstore.set_secret("llm.https://api.example.com/v1", "vault-key")
+        self.assertEqual(client.resolve_key("https://api.example.com/v1"), "vault-key")
+        self.assertEqual(client.resolve_key("https://api.example.com"), "vault-key")
+
+    def test_no_key_stored_returns_empty(self):
+        self.assertEqual(client.resolve_key("https://api.example.com/v1"), "")
+
+    def test_vault_key_on_plaintext_public_host_raises(self):
+        credstore.set_secret("llm.http://api.example.com/v1", "vault-key")
+        with self.assertRaises(ValueError) as ctx:
+            client.resolve_key("http://api.example.com/v1")
+        self.assertIn("refusing to send credentials over plaintext HTTP to a public host",
+                      str(ctx.exception))
+
+    def test_public_literal_ip_rejected_plaintext(self):
+        credstore.set_secret("llm.http://203.0.113.7/v1", "vault-key")
+        with self.assertRaises(ValueError) as ctx:
+            client.resolve_key("http://203.0.113.7/v1")
+        self.assertIn("public host", str(ctx.exception))
+        credstore.set_secret("llm.https://203.0.113.7/v1", "vault-key")
+        self.assertEqual(client.resolve_key("https://203.0.113.7/v1"), "vault-key")
+
+    def test_private_and_vpn_plaintext_hosts_accept_vault_key(self):
+        for url in ("http://10.1.2.3:8080/v1", "http://172.16.9.9/v1", "http://192.168.1.10/v1",
+                    "http://100.84.76.75:18086/v1", "http://169.254.1.1/v1",
+                    "http://[fd12::1]:8080/v1", "http://[fe80::1]:8080/v1"):
+            credstore.set_secret("llm." + url, "vault-key")
+            self.assertEqual(client.resolve_key(url), "vault-key", url)
+
+    def test_transport_is_safe_matrix(self):
+        for url in ("http://100.84.76.75:18086/v1", "http://10.0.0.1/v1", "http://192.168.0.5/v1",
+                    "http://172.16.0.5/v1", "http://169.254.5.5/v1", "http://[fd12::1]/v1",
+                    "http://[fe80::2]/v1", "http://127.0.0.1:8080/v1", "http://localhost/v1",
+                    "https://203.0.113.7/v1"):
+            self.assertTrue(client.transport_is_safe(url), url)
+        for url in ("http://203.0.113.7/v1", "http://8.8.8.8/v1", "http://api.example.com/v1",
+                    "http://[2001:db8::1]/v1"):
+            self.assertFalse(client.transport_is_safe(url), url)
+
+    def test_vault_key_allowed_on_loopback_http(self):
+        credstore.set_secret("llm.http://127.0.0.1:8080/v1", "vault-key")
+        self.assertEqual(client.resolve_key("http://127.0.0.1:8080/v1"), "vault-key")
+        self.assertEqual(client.resolve_key("http://localhost:8080/v1"), "")
+
 
 class ChatStreamTests(unittest.IsolatedAsyncioTestCase):
     async def test_chat_stream_sse(self):
@@ -197,6 +272,25 @@ class ChatStreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(len(streamed), 100)
         self.assertTrue(disconnected)
 
+    async def test_chat_stream_refuses_redirects_for_credentialed_requests(self):
+        app = web.Application()
+
+        async def chat_handler(request):
+            raise web.HTTPFound("http://127.0.0.1:1/elsewhere")
+
+        app.router.add_post("/v1/chat/completions", chat_handler)
+
+        async def run(session, base):
+            with self.assertRaises(RuntimeError) as ctx:
+                await client.chat_stream(
+                    session, base, "secret-key",
+                    {"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+                    lambda n: None,
+                )
+            self.assertIn("not followed for credentialed requests", str(ctx.exception))
+
+        await _with_server(app, run)
+
     async def test_default_config_sentinels_never_reach_provider(self):
         bodies = []
 
@@ -236,6 +330,21 @@ class UnloadTests(unittest.IsolatedAsyncioTestCase):
         status = await _with_server(app, run)
         self.assertEqual(calls, [("/sleep", "1")])
         self.assertIn("offloaded", status)
+
+    async def test_unload_sleep_post_refuses_redirects(self):
+        app = web.Application()
+
+        async def sleep_handler(request):
+            raise web.HTTPFound("http://127.0.0.1:1/elsewhere")
+
+        app.router.add_post("/sleep", sleep_handler)
+
+        async def run(session, base):
+            with self.assertRaises(RuntimeError) as ctx:
+                await client.unload_command(session, base, "secret-key", "vllm", "offload_vram_to_ram", "m")
+            self.assertIn("not followed for credentialed requests", str(ctx.exception))
+
+        await _with_server(app, run)
 
     async def test_unload_unsupported_profile(self):
         with self.assertRaises(ValueError) as ctx:

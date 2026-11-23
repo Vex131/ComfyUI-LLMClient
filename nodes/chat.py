@@ -57,7 +57,6 @@ class LLMChat(io.ComfyNode):
     async def execute(cls, model, system_prompt, prompt, image=None, model_config=None, vision="auto",
                       reasoning_effort="", seed=-1) -> io.NodeOutput:
         base_url = model["base_url"]
-        api_key = model.get("api_key", "")
         model_id = model["model"]
 
         messages = []
@@ -93,6 +92,7 @@ class LLMChat(io.ComfyNode):
             if max_tokens > 0:
                 api.execution.set_progress(text_len, max_tokens)
 
+        api_key = client.resolve_key(base_url)
         timeout = aiohttp.ClientTimeout(total=sampling.get("timeout_seconds", 300))
         async with aiohttp.ClientSession(timeout=timeout) as session:
             text, reasoning = await client.chat_stream(

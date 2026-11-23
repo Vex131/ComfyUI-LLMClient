@@ -1,9 +1,25 @@
+import ipaddress
 import json
 from urllib.parse import urlsplit
 
 import aiohttp
 
+from . import credstore
 from .profiles import CAPABILITIES
+
+_PRIVATE_HOSTS = ("127.0.0.1", "localhost", "::1")
+# Explicit allowlist instead of ipaddress.is_private: the stdlib treats
+# documentation prefixes (203.0.113.0/24 etc.) as private and RFC 6598 CGNAT
+# (100.64.0.0/10) as public, which is the opposite of this policy.
+_PRIVATE_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+)
 
 
 def normalize_root(base_url: str) -> str:
@@ -13,6 +29,31 @@ def normalize_root(base_url: str) -> str:
     if not root.endswith("/v1"):
         root += "/v1"
     return root
+
+
+def _host_is_private(url: str) -> bool:
+    host = (urlsplit(url).hostname or "").strip("[]").lower()
+    if host in _PRIVATE_HOSTS:
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return addr.is_loopback or any(addr in network for network in _PRIVATE_NETWORKS)
+
+
+def transport_is_safe(base_url: str) -> bool:
+    root = normalize_root(base_url)
+    return urlsplit(root).scheme.lower() == "https" or _host_is_private(root)
+
+
+def resolve_key(base_url: str) -> str:
+    root = normalize_root(base_url)
+    vault_key = credstore.get_secret("llm." + root)
+    if vault_key and urlsplit(root).scheme.lower() != "https" and not _host_is_private(root):
+        raise ValueError(
+            "refusing to send credentials over plaintext HTTP to a public host: {}".format(root))
+    return vault_key or ""
 
 
 def origin_root(base_url: str) -> str:
@@ -31,7 +72,8 @@ def _headers(api_key: str) -> dict:
 
 async def _get_json(session, url: str, headers: dict):
     try:
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=3)) as resp:
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=3),
+                               allow_redirects=False) as resp:
             if resp.status != 200:
                 return None
             return await resp.json(content_type=None)
@@ -44,7 +86,10 @@ async def probe(session, base_url: str, api_key: str) -> dict:
     origin = origin_root(base_url)
     headers = _headers(api_key)
     try:
-        async with session.get(root + "/models", headers=headers) as resp:
+        async with session.get(root + "/models", headers=headers, allow_redirects=False) as resp:
+            if resp.status in (301, 302, 303, 307, 308):
+                raise RuntimeError("HTTP {} redirect from {} not followed for credentialed requests".format(
+                    resp.status, root + "/models"))
             if resp.status != 200:
                 return {"ok": False, "profile": "generic", "models": [], "context": None,
                         "error": "GET {}/models returned HTTP {}".format(root, resp.status)}
@@ -99,7 +144,10 @@ async def chat_stream(session, base_url: str, api_key: str, payload: dict, on_ch
     text = ""
     reasoning = ""
     async with session.post(root + "/chat/completions", json=dict(payload, stream=True),
-                            headers=_headers(api_key)) as resp:
+                            headers=_headers(api_key), allow_redirects=False) as resp:
+        if resp.status in (301, 302, 303, 307, 308):
+            raise RuntimeError("HTTP {} redirect from {} not followed for credentialed requests".format(
+                resp.status, root + "/chat/completions"))
         if resp.status != 200:
             raise RuntimeError("HTTP {} from provider: {}".format(resp.status, (await resp.text())[:500]))
         async for raw_line in resp.content:
@@ -128,7 +176,10 @@ async def chat_stream(session, base_url: str, api_key: str, payload: dict, on_ch
 
 
 async def _post(session, url: str, headers: dict, json_body: dict = None):
-    async with session.post(url, headers=headers, json=json_body) as resp:
+    async with session.post(url, headers=headers, json=json_body, allow_redirects=False) as resp:
+        if resp.status in (301, 302, 303, 307, 308):
+            raise RuntimeError("HTTP {} redirect from {} not followed for credentialed requests".format(
+                resp.status, url))
         if resp.status != 200:
             raise RuntimeError("HTTP {} from provider: {}".format(resp.status, (await resp.text())[:300]))
 
@@ -152,7 +203,10 @@ async def unload_command(session, base_url: str, api_key: str, profile: str, mod
         return "vLLM awake: weights restored."
 
     try:
-        async with session.get(origin + "/models", headers=headers) as resp:
+        async with session.get(origin + "/models", headers=headers, allow_redirects=False) as resp:
+            if resp.status in (301, 302, 303, 307, 308):
+                raise RuntimeError("HTTP {} redirect from {} not followed for credentialed requests".format(
+                    resp.status, origin + "/models"))
             data = await resp.json() if resp.status == 200 else {}
     except (aiohttp.ClientError, ValueError):
         data = {}

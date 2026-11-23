@@ -72,6 +72,30 @@ class ChatTurnTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             asyncio.run(_with_server(app, run))
 
+    def test_redirect_not_followed_for_credentialed_request(self):
+        hits = []
+
+        async def redirect_handler(request):
+            hits.append("main")
+            return web.Response(status=302, headers={"Location": "/followed"})
+
+        async def followed_handler(request):
+            hits.append("followed")
+            return delta_response([{"content": "leaked"}])
+
+        async def run(session, base):
+            return await agent.chat_turn(session, base, "sk-secret", {"model": "m", "messages": []})
+
+        app = web.Application()
+        app.router.add_post("/v1/chat/completions", redirect_handler)
+        app.router.add_post("/followed", followed_handler)
+        with self.assertRaises(RuntimeError) as ctx:
+            asyncio.run(_with_server(app, run))
+        self.assertIn("302", str(ctx.exception))
+        self.assertIn("redirect", str(ctx.exception))
+        self.assertNotIn("tool", str(ctx.exception).lower())
+        self.assertEqual(hits, ["main"])
+
 
 class ParseReactTests(unittest.TestCase):
     def test_fenced(self):
@@ -207,6 +231,21 @@ class RunLoopTests(unittest.TestCase):
         result = asyncio.run(_with_server(self._tool_app(scripted), run))
         self.assertEqual(result["iterations"], 3)
         self.assertEqual(result["final"], "working")
+
+    def test_redirect_surfaces_as_provider_error(self):
+        def scripted(body, turn):
+            return web.Response(status=302, headers={"Location": "/elsewhere"})
+
+        async def run(session, base):
+            messages = [{"role": "user", "content": "hi"}]
+            return await agent.run_loop(session, base, "sk", "m", messages,
+                                        tool_impls={"echo": lambda a, s: "x"},
+                                        max_iterations=2)
+
+        with self.assertRaises(RuntimeError) as ctx:
+            asyncio.run(_with_server(self._tool_app(scripted), run))
+        self.assertIn("redirect", str(ctx.exception))
+        self.assertNotIn("tool", str(ctx.exception).lower())
 
     def test_exhaustion_closing_turn_without_tools(self):
         requests = []

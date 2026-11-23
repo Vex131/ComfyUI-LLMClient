@@ -58,8 +58,9 @@ TOOL_SCHEMAS = {
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Search the web (DuckDuckGo). Returns titles, URLs and snippets. "
-                           "Call web_fetch on a promising result to read the full page.",
+            "description": "Search the web (Tavily/SearXNG/DuckDuckGo with automatic failover and "
+                           "caching). Returns titles, URLs and snippets. If results are unavailable, "
+                           "use web_fetch with a known URL instead.",
             "parameters": {
                 "type": "object",
                 "properties": {"query": {"type": "string", "description": "Search query."}},
@@ -138,7 +139,10 @@ async def chat_turn(session, base_url: str, api_key: str, payload: dict, on_chun
     reasoning = ""
     calls: dict = {}
     async with session.post(root + "/chat/completions", json=dict(payload, stream=True),
-                            headers=_headers(api_key)) as resp:
+                            headers=_headers(api_key), allow_redirects=False) as resp:
+        if resp.status in (301, 302, 303, 307, 308):
+            raise RuntimeError("HTTP {} redirect from provider not followed for credentialed "
+                               "requests".format(resp.status))
         if resp.status != 200:
             raise RuntimeError("HTTP {} from provider: {}".format(resp.status, (await resp.text())[:500]))
         async for raw_line in resp.content:

@@ -31,8 +31,9 @@ class LLMUnload(io.ComfyNode):
         entry = config.cached_entry(base_url)
         profile = entry["profile"] if entry else "generic"
 
+        api_key = client.resolve_key(base_url)
         async with aiohttp.ClientSession() as session:
             status = await client.unload_command(
-                session, base_url, model.get("api_key", ""), profile, mode, model.get("model", "")
+                session, base_url, api_key, profile, mode, model.get("model", "")
             )
         return io.NodeOutput(status, text)
