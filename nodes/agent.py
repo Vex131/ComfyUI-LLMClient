@@ -53,8 +53,8 @@ class LLMAgent(io.ComfyNode):
                 LLMDocumentsType.Input("documents", optional=True,
                                        tooltip="Connect a Load Documents node for document search."),
                 io.Combo.Input(
-                    "vision", options=["auto", "yes", "no"], default="auto", advanced=True,
-                    tooltip="auto checks known capabilities; yes forces image input; no rejects connected images.",
+                    "vision", options=["auto", "enabled", "disable"], default="auto", advanced=True,
+                    tooltip="auto checks known capabilities; enabled forces image input; disable rejects connected images.",
                 ),
                 io.String.Input(
                     "reasoning_effort",
@@ -119,13 +119,13 @@ class LLMAgent(io.ComfyNode):
             messages.extend(conversation_memory.messages(entry))
         content = prompt
         if image is not None:
-            if vision == "no":
-                raise ValueError("Vision override is set to 'no' but an image is connected.")
+            if vision in ("disable", "no"):
+                raise ValueError("Vision override is set to 'disable' but an image is connected.")
             if vision == "auto":
                 for model_entry in config.cached_models(base_url):
                     if model_entry.get("id") == model_id and model_entry.get("vision") is False:
                         raise ValueError(
-                            "Selected model '{}' does not support image input. Set the vision override to 'yes' to force it.".format(model_id)
+                            "Selected model '{}' does not support image input. Set the vision override to 'enabled' to force it.".format(model_id)
                         )
             content = [
                 {"type": "text", "text": prompt},

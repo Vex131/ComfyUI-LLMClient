@@ -881,6 +881,21 @@ function applyExtractLabels(node) {
 }
 
 app.registerExtension({
+    name: "LLMClient.Vision",
+    nodeCreated(node) {
+        if (!["LLMChat", "LLMAgent"].includes(node.comfyClass)) return;
+        const configure = node.configure.bind(node);
+        node.configure = function (info) {
+            const result = configure(info);
+            const vision = getWidget(node, "vision");
+            if (vision?.value === "yes") vision.value = "enabled";
+            if (vision?.value === "no") vision.value = "disable";
+            return result;
+        };
+    },
+});
+
+app.registerExtension({
     name: "LLMClient.Extract",
     nodeCreated(node) {
         if (node.comfyClass !== "LLMPatternExtract") {

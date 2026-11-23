@@ -195,7 +195,9 @@ class TimeoutNodeTests(unittest.IsolatedAsyncioTestCase):
                 await node.execute(model, "describe", image=["first"])
             with self.assertRaisesRegex(ValueError, "override"):
                 await node.execute(model, "describe", image=["first"], vision="no")
-            await node.execute(model, "describe", image=["first", "second"], vision="yes")
+            with self.assertRaisesRegex(ValueError, "override"):
+                await node.execute(model, "describe", image=["first"], vision="disable")
+            await node.execute(model, "describe", image=["first", "second"], vision="enabled")
             encode.assert_called_once_with("first")
             content = run_loop.call_args.args[4][1]["content"]
             self.assertEqual(content, [

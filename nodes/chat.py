@@ -35,10 +35,10 @@ class LLMChat(io.ComfyNode):
                 io.Image.Input("image", optional=True, tooltip="Optional image for a vision model; only the first image in a batch is used."),
                 io.Combo.Input(
                     "vision",
-                    options=["auto", "yes", "no"],
+                    options=["auto", "enabled", "disable"],
                     default="auto",
                     advanced=True,
-                    tooltip="auto checks known capabilities; yes forces image input; no rejects connected images.",
+                    tooltip="auto checks known capabilities; enabled forces image input; disable rejects connected images.",
                 ),
                 io.String.Input(
                     "reasoning_effort",
@@ -88,13 +88,13 @@ class LLMChat(io.ComfyNode):
 
         content = prompt
         if image is not None:
-            if vision == "no":
-                raise ValueError("Vision override is set to 'no' but an image is connected.")
+            if vision in ("disable", "no"):
+                raise ValueError("Vision override is set to 'disable' but an image is connected.")
             if vision == "auto":
                 for model_entry in config.cached_models(base_url):
                     if model_entry.get("id") == model_id and model_entry.get("vision") is False:
                         raise ValueError(
-                            "Selected model '{}' does not support image input. Set the vision override to 'yes' to force it.".format(model_id)
+                            "Selected model '{}' does not support image input. Set the vision override to 'enabled' to force it.".format(model_id)
                         )
             content = [
                 {"type": "text", "text": prompt},
