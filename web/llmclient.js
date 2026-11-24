@@ -130,17 +130,84 @@ app.registerExtension({
         const web = getWidget(node, "web_tool");
         const local = getWidget(node, "allow_local_web");
         if (!web || !local) return;
+        const widgets = node.widgets || [];
+        const from = widgets.indexOf(local);
+        if (from >= 0 && from !== widgets.indexOf(web) + 1) {
+            widgets.splice(from, 1);
+            widgets.splice(widgets.indexOf(web) + 1, 0, local);
+        }
         const originalType = local.type;
         const originalSize = local.computeSize;
+        let visible = !!web.value;
         const refresh = () => {
             local.type = web.value ? originalType : "hidden";
             local.computeSize = web.value ? originalSize : () => [0, -4];
+            visible = !!web.value;
             node.setDirtyCanvas?.(true, true);
         };
         const callback = web.callback;
         web.callback = function (...args) {
             const result = callback?.apply(this, args);
+            const changed = visible !== !!web.value;
             refresh();
+            if (changed && node.size && node.setSize) {
+                const height = originalSize?.call(local, node.size[0])?.[1] ?? 20;
+                node.setSize([node.size[0], node.size[1] + (visible ? 1 : -1) * (height + 4)]);
+            }
+            return result;
+        };
+        const configured = node.onConfigure;
+        node.onConfigure = function (...args) {
+            const result = configured?.apply(this, args);
+            const info = args[0];
+            if (!info?.properties?.llmclient_agent_config_layout && Array.isArray(info?.widgets_values)) {
+                const oldNames = ["system_prompt", "output_format", "json_hint", "assets_tool",
+                    "web_tool", "tool_mode", "max_iterations", "allow_local_web"];
+                for (const [index, name] of oldNames.entries()) {
+                    const widget = getWidget(node, name);
+                    const value = info.widgets_values_named?.[name] ?? info.widgets_values[index]
+                        ?? (name === "allow_local_web" ? false : undefined);
+                    if (widget && value !== undefined) widget.value = value;
+                }
+            }
+            node.properties ||= {};
+            node.properties.llmclient_agent_config_layout = 1;
+            refresh();
+            return result;
+        };
+        node.properties ||= {};
+        node.properties.llmclient_agent_config_layout = 1;
+        refresh();
+    },
+});
+
+app.registerExtension({
+    name: "LLMClient.AgentJsonHint",
+    nodeCreated(node) {
+        if (node.comfyClass !== "LLMAgentConfig") return;
+        const format = getWidget(node, "output_format");
+        const hint = getWidget(node, "json_hint");
+        if (!format || !hint) return;
+        const originalType = hint.type;
+        const originalSize = hint.computeSize;
+        const originalDisplay = hint.element?.style.display;
+        let visible = format.value === "json";
+        const refresh = () => {
+            visible = format.value === "json";
+            hint.type = visible ? originalType : "hidden";
+            hint.computeSize = visible ? originalSize : () => [0, -4];
+            if (hint.element) hint.element.style.display = visible ? originalDisplay : "none";
+            node.setDirtyCanvas?.(true, true);
+        };
+        const callback = format.callback;
+        format.callback = function (...args) {
+            const result = callback?.apply(this, args);
+            const changed = visible !== (format.value === "json");
+            refresh();
+            if (changed && node.size && node.setSize) {
+                const height = originalSize?.call(hint, node.size[0])?.[1] ?? 20;
+                node.setSize([node.size[0], node.size[1] + (visible ? 1 : -1) * (height + 4)]);
+            }
             return result;
         };
         const configured = node.onConfigure;

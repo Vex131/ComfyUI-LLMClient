@@ -24,6 +24,65 @@ test("local web access switch follows web tool visibility and retains its value"
     assert.equal(local.type, "toggle");
 });
 
+test("agent web access stays below web tools, keeps prompt space and migrates old workflows", () => {
+    const extensions = [];
+    const app = { registerExtension: extension => extensions.push(extension) };
+    const source = fs.readFileSync("web/llmclient.js", "utf8").replace(/^import .*;\r?\n/gm, "");
+    vm.runInNewContext(source, { app, api: {}, console });
+    const make = (name, value) => ({ name, value });
+    const widgets = [
+        make("system_prompt", "prompt"), make("output_format", "json"),
+        make("json_hint", "keys"), make("assets_tool", true),
+        { ...make("web_tool", false), callback(value) { this.value = value; } },
+        make("tool_mode", "native"), make("max_iterations", 9),
+        { ...make("allow_local_web", true), type: "toggle", computeSize: () => [100, 20] },
+    ];
+    const node = { comfyClass: "LLMAgentConfig", widgets, size: [400, 300],
+        setSize(size) { this.size = size; }, setDirtyCanvas() {} };
+    extensions.find(e => e.name === "LLMClient.AgentWebAccess").nodeCreated(node);
+    assert.equal(widgets[5].name, "allow_local_web");
+    const web = widgets.find(w => w.name === "web_tool");
+    web.callback(true);
+    assert.equal(node.size[1], 324);
+    web.callback(false);
+    assert.equal(node.size[1], 300);
+    const old = ["saved prompt", "json", "x", false, true, "json", 12, true];
+    widgets.forEach((widget, i) => { widget.value = old[i]; });
+    node.onConfigure({ widgets_values: old });
+    for (const [name, value] of Object.entries({
+        system_prompt: "saved prompt", web_tool: true, allow_local_web: true,
+        tool_mode: "json", max_iterations: 12,
+    })) assert.equal(widgets.find(w => w.name === name).value, value);
+});
+
+test("agent JSON hint is shown only in JSON mode and retains its value", () => {
+    const extensions = [];
+    const app = { registerExtension: extension => extensions.push(extension) };
+    const source = fs.readFileSync("web/llmclient.js", "utf8").replace(/^import .*;\r?\n/gm, "");
+    vm.runInNewContext(source, { app, api: {}, console });
+    const format = { name: "output_format", value: "text", callback(value) { this.value = value; } };
+    const size = () => [100, 20];
+    const hint = { name: "json_hint", value: "positive, negative", type: "text", computeSize: size,
+        element: { style: { display: "" } } };
+    const node = { comfyClass: "LLMAgentConfig", widgets: [format, hint], size: [400, 300],
+        setSize(size) { this.size = size; }, setDirtyCanvas() {} };
+    extensions.find(e => e.name === "LLMClient.AgentJsonHint").nodeCreated(node);
+    assert.equal(hint.type, "hidden");
+    assert.equal(hint.element.style.display, "none");
+    format.callback("json");
+    assert.equal(hint.type, "text");
+    assert.equal(hint.computeSize, size);
+    assert.equal(hint.value, "positive, negative");
+    assert.equal(node.size[1], 324);
+    format.callback("text");
+    assert.equal(hint.value, "positive, negative");
+    assert.equal(node.size[1], 300);
+    format.value = "json";
+    node.onConfigure({});
+    assert.equal(hint.value, "positive, negative");
+    assert.equal(hint.type, "text");
+});
+
 test("free models migrates the old RAM mode", () => {
     const extensions = [];
     const app = { registerExtension: extension => extensions.push(extension) };
