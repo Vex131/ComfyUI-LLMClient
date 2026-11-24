@@ -925,14 +925,28 @@ function parsePatternLabels(text) {
     return labels;
 }
 
-function applyExtractLabels(node) {
+function applyExtractLabels(node, text = getWidget(node, "patterns")?.value) {
     if (!node.outputs) {
         return;
     }
-    const labels = parsePatternLabels(getWidget(node, "patterns")?.value);
+    const labels = parsePatternLabels(text);
+    // Keep linked legacy slots intact; removing a linked output destroys its wires.
+    let count = Math.min(labels.length, 12);
+    node.outputs.forEach((output, i) => {
+        if (output.links?.length) count = Math.max(count, i + 1);
+    });
+    while (node.outputs.length > count) node.removeOutput(node.outputs.length - 1);
+    while (node.outputs.length < count) {
+        node.addOutput(`field_${node.outputs.length + 1}`, "STRING");
+    }
     node.outputs.forEach((output, i) => {
         output.name = labels[i] || `field_${i + 1}`;
+        output.label = output.name;
     });
+    if (node.size && node.computeSize) {
+        const size = node.computeSize();
+        node.setSize([Math.max(node.size[0], size[0]), size[1]]);
+    }
     node.setDirtyCanvas(true, true);
 }
 
@@ -976,7 +990,7 @@ app.registerExtension({
             const original = patterns.callback;
             patterns.callback = function (value, ...args) {
                 original?.call(this, value, ...args);
-                applyExtractLabels(node);
+                applyExtractLabels(node, value);
             };
         }
         const originalConfigure = node.configure.bind(node);

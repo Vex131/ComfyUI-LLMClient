@@ -17,7 +17,8 @@ def parse_buffer(value, max_context):
     try:
         number = Decimal(text)
     except InvalidOperation:
-        raise ValueError("Buffer must be a percentage or a whole number of tokens.") from None
+        raise ValueError("LLM Context Management buffer must be a percentage (for example 15%) "
+                         "or a whole number of tokens above 100.") from None
     if not number.is_finite() or number <= 0 or number == 100:
         raise ValueError("Buffer must be greater than zero and cannot equal 100.")
     if percent or number < 100:
@@ -37,7 +38,9 @@ def validate_budget(max_context, max_output_tokens, buffer):
     reserve = parse_buffer(buffer, max_context)
     budget = max_context - max_output_tokens - reserve
     if budget <= 1:
-        raise ValueError("Context window leaves insufficient input space after output and buffer.")
+        raise ValueError("Context window leaves insufficient input space. Increase max_context or "
+                         "reduce max_output_tokens in LLM Model Config, or reduce the buffer in "
+                         "LLM Context Management.")
     return budget
 
 

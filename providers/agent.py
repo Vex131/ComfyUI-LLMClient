@@ -2,7 +2,7 @@ import inspect
 import json
 import re
 
-from .client import build_chat_payload, normalize_root, stream_post
+from .client import build_chat_payload, normalize_root, provider_http_error, stream_post
 
 TOOL_SCHEMAS = {
     "search_documents": {
@@ -157,7 +157,7 @@ async def chat_turn(session, base_url: str, api_key: str, payload: dict, on_chun
             raise RuntimeError("HTTP {} redirect from provider not followed for credentialed "
                                "requests".format(resp.status))
         if resp.status != 200:
-            raise RuntimeError("HTTP {} from provider: {}".format(resp.status, (await resp.text())[:500]))
+            raise provider_http_error(resp.status, await resp.text())
         async for raw_line in resp.content:
             if should_interrupt is not None and should_interrupt():
                 resp.close()

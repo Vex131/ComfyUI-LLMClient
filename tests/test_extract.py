@@ -31,6 +31,10 @@ class JsonExtractTests(unittest.TestCase):
         text = "Sure:\n```json\n{\"positive\": \"cat\"}\n```\n"
         self.assertEqual(extract.extract_all(text, "json", [("positive", "")]), ["cat"])
 
+    def test_object_surrounded_by_prose(self):
+        self.assertEqual(extract.extract_all('Here it is: {"positive":"cat"} done',
+                                             "json", [("positive", "")]), ["cat"])
+
     def test_nested_path(self):
         text = '{"sampler": {"name": "euler", "cfg": 7.5}}'
         values = extract.extract_all(text, "json", [("cfg", "sampler.cfg"), ("name", "sampler.name")])

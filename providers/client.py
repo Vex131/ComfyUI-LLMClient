@@ -1,6 +1,6 @@
 import ipaddress
 import json
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -69,6 +69,34 @@ def _headers(api_key: str) -> dict:
     if api_key:
         headers["Authorization"] = "Bearer " + api_key
     return headers
+
+
+def provider_connection_error(url: str) -> RuntimeError:
+    parts = urlsplit(url)
+    host = parts.hostname or "unknown host"
+    if ":" in host:
+        host = "[{}]".format(host)
+    address = "{}:{}".format(host, parts.port) if parts.port else host
+    return RuntimeError(
+        "LLM provider cannot be reached at {}. Check that the server is running "
+        "and the provider URL is correct.".format(address))
+
+
+def provider_http_error(status: int, detail: str) -> RuntimeError:
+    advice = {
+        401: "Check the provider API key.",
+        403: "Check the API key's permissions and provider access.",
+        404: "Check the provider URL and selected model.",
+        429: "The provider rate limit or quota may have been reached; check your account and try again later.",
+    }.get(status)
+    if advice is None and 500 <= status <= 599:
+        advice = "Check the provider server logs and try again."
+    message = "HTTP {} from provider.".format(status)
+    if advice:
+        message += " " + advice
+    if detail:
+        message += " Provider response: " + detail[:500]
+    return RuntimeError(message)
 
 
 async def _get_json(session, url: str, headers: dict):
@@ -155,13 +183,34 @@ def build_chat_payload(model: str, messages: list, sampling: dict = None, seed: 
 
 @asynccontextmanager
 async def stream_post(session, url, api_key, payload, request_usage=False, on_request=None):
+    try:
+        async with _stream_post(session, url, api_key, payload, request_usage, on_request) as resp:
+            yield resp
+    except TimeoutError:
+        raise TimeoutError(
+            "LLM provider request timed out. Check the server or increase timeout_seconds "
+            "in LLM Model Config.") from None
+
+
+@asynccontextmanager
+async def _stream_post(session, url, api_key, payload, request_usage=False, on_request=None):
     body = dict(payload, stream=True)
     if request_usage:
         body["stream_options"] = {"include_usage": True}
     for _ in range(4):
         if on_request:
             on_request(body)
-        async with session.post(url, json=body, headers=_headers(api_key), allow_redirects=False) as resp:
+        async with AsyncExitStack() as stack:
+            try:
+                resp = await stack.enter_async_context(
+                    session.post(url, json=body, headers=_headers(api_key), allow_redirects=False))
+            except (aiohttp.ClientConnectorCertificateError, aiohttp.ClientConnectorSSLError):
+                raise
+            except aiohttp.ClientConnectorError:
+                raise provider_connection_error(url) from None
+            except aiohttp.InvalidURL:
+                raise ValueError("Invalid LLM Provider URL. Enter a valid HTTP or HTTPS address, "
+                                 "for example http://127.0.0.1:8080/v1.") from None
             if resp.status not in (400, 422):
                 yield resp
                 return
@@ -183,7 +232,7 @@ async def stream_post(session, url, api_key, payload, request_usage=False, on_re
                     if isinstance(m, dict) else m for m in messages
                 ]
                 continue
-            raise RuntimeError("HTTP {} from provider: {}".format(resp.status, error[:500]))
+            raise provider_http_error(resp.status, error)
     raise RuntimeError("Provider rejected supported request compatibility options.")
 
 
@@ -199,7 +248,7 @@ async def chat_stream(session, base_url: str, api_key: str, payload: dict, on_ch
             raise RuntimeError("HTTP {} redirect from {} not followed for credentialed requests".format(
                 resp.status, root + "/chat/completions"))
         if resp.status != 200:
-            raise RuntimeError("HTTP {} from provider: {}".format(resp.status, (await resp.text())[:500]))
+            raise provider_http_error(resp.status, await resp.text())
         async for raw_line in resp.content:
             if should_interrupt is not None and should_interrupt():
                 # Closing the response drops the connection so the provider
@@ -235,7 +284,7 @@ async def _post(session, url: str, headers: dict, json_body: dict = None):
             raise RuntimeError("HTTP {} redirect from {} not followed for credentialed requests".format(
                 resp.status, url))
         if resp.status != 200:
-            raise RuntimeError("HTTP {} from provider: {}".format(resp.status, (await resp.text())[:300]))
+            raise provider_http_error(resp.status, await resp.text())
 
 
 async def unload_command(session, base_url: str, api_key: str, profile: str, mode: str, model_id: str) -> str:
@@ -273,6 +322,10 @@ async def unload_command(session, base_url: str, api_key: str, profile: str, mod
                 raise RuntimeError("HTTP {} redirect from {} not followed for credentialed requests".format(
                     resp.status, origin + "/models"))
             data = await resp.json() if resp.status == 200 else {}
+    except (aiohttp.ClientConnectorCertificateError, aiohttp.ClientConnectorSSLError):
+        raise
+    except aiohttp.ClientConnectorError:
+        raise provider_connection_error(origin) from None
     except (aiohttp.ClientError, ValueError):
         data = {}
     entries = data.get("data", []) if isinstance(data, dict) else []

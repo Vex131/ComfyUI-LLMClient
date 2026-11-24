@@ -36,7 +36,18 @@ class LLMUnload(io.ComfyNode):
 
         api_key = client.resolve_key(base_url)
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-            status = await client.unload_command(
-                session, base_url, api_key, profile, mode, model.get("model", "")
-            )
+            try:
+                status = await client.unload_command(
+                    session, base_url, api_key, profile, mode, model.get("model", "")
+                )
+            except (aiohttp.ClientConnectorCertificateError, aiohttp.ClientConnectorSSLError):
+                raise
+            except aiohttp.ClientConnectorError:
+                raise client.provider_connection_error(client.origin_root(base_url)) from None
+            except aiohttp.InvalidURL:
+                raise ValueError("Invalid LLM Provider URL. Enter a valid HTTP or HTTPS address, "
+                                 "for example http://127.0.0.1:8080/v1.") from None
+            except TimeoutError:
+                raise TimeoutError("LLM unload request timed out after 30 seconds. "
+                                   "Check that the provider server is responsive.") from None
         return io.NodeOutput(status, text)

@@ -15,6 +15,20 @@ class FakeModel:
 
 
 class DocumentSearchTests(unittest.TestCase):
+    def test_invalid_text_encoding_has_actionable_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "bad.txt")
+            path.write_bytes(b"\xff")
+            with self.assertRaisesRegex(ValueError, "UTF-8"):
+                rag.DocumentIndex(str(path), "", model=FakeModel())
+
+    def test_missing_embedding_model_has_config_guidance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "document.txt")
+            path.write_text("some text", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "LLM RAG Config"):
+                rag.DocumentIndex(str(path), str(Path(directory, "missing")))
+
     def test_vector_search_filters_nonfinite_and_keeps_tie_order(self):
         class Model:
             def encode(self, texts, **kwargs):
@@ -61,7 +75,7 @@ class DocumentSearchTests(unittest.TestCase):
     def test_missing_model_path(self):
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, "doc.txt").write_text("text", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "local directory"):
+            with self.assertRaisesRegex(ValueError, "LLM RAG Config"):
                 rag.DocumentIndex(directory, str(Path(directory, "missing")))
 
     def test_model_discovery_and_safe_selection(self):

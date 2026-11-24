@@ -74,7 +74,8 @@ def resolve_model(selection, direct_path):
                 or Path(parts[1]).name != parts[1] or parts[1] in (".", ".."):
             raise ValueError("Invalid installed embedding model name.")
         return str(model_root().parent / parts[0] / parts[1])
-    raise ValueError("Unknown embedding model selection.")
+    raise ValueError("Unknown embedding model selection in LLM RAG Config. Refresh the browser "
+                     "and choose an available model.")
 
 
 def resolve_document_path(path):
@@ -185,7 +186,11 @@ def _pages(path):
         for table in doc.tables:
             paragraphs.extend(" | ".join(cell.text for cell in row.cells) for row in table.rows)
         return [("", "\n".join(paragraphs))]
-    return [("", path.read_text(encoding="utf-8-sig"))]
+    try:
+        return [("", path.read_text(encoding="utf-8-sig"))]
+    except UnicodeDecodeError:
+        raise ValueError("Cannot read document {} as UTF-8 text. Save it as UTF-8 and try again."
+                         .format(path)) from None
 
 
 def _chunks(text, size=800, overlap=150):
@@ -208,7 +213,8 @@ def _chunks(text, size=800, overlap=150):
 class DocumentIndex:
     def __init__(self, path, model_path, model=None):
         if not model_path and model is None:
-            raise ValueError("Provide a local Sentence Transformers model path.")
+            raise ValueError("In LLM RAG Config, select an embedding model or enter a local "
+                             "Sentence Transformers model directory.")
         self.chunks = []
         for file in _documents(path):
             for location, text in _pages(file):
@@ -220,7 +226,9 @@ class DocumentIndex:
             raise ValueError("No extractable text found. Scanned PDFs require OCR before indexing.")
         if model is None:
             if not Path(model_path).expanduser().is_dir():
-                raise ValueError("Embedding model must be a local directory: {}".format(model_path))
+                raise ValueError("Embedding model directory not found: {}. In LLM RAG Config, "
+                                 "download the selected model or choose a valid local model directory."
+                                 .format(model_path))
             from sentence_transformers import SentenceTransformer
             model = SentenceTransformer(str(Path(model_path).expanduser()), device="cpu",
                                         local_files_only=True, trust_remote_code=False)

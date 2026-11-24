@@ -109,14 +109,20 @@ LLM Pattern Extract → CLIP Text Encode.
 Fans one LLM output string out into labeled sockets — replaces chained
 regex nodes.
 
-- `text` — LLM Chat / LLM Agent `output`.
+- `text` — text to parse when the optional `text_input` socket is unconnected.
+- `text_input` — connect a string, such as LLM Chat / LLM Agent `output`;
+  when connected, it takes precedence over the text box, even if empty.
 - `mode` — `json` (key path per line; empty = label, dots for nesting like
   `sampler.name`) or `regex` (named group `(?P<value>...)` or group 1;
   prefix `(?s)` for multiline).
-- `patterns` — one `label = pattern` per line; sockets rename live from
-  your labels (max 12). `#` lines are comments.
-- Missing matches are empty strings. JSON output from LLM Chat/Agent works
-  even when fenced in ```json blocks.
+- `patterns` — one `label = pattern` per line; visible sockets follow the
+  labels (max 12). `#` lines are comments. Connected legacy sockets remain
+  visible to avoid disconnecting existing workflows.
+- `on_missing` — `continue` returns empty strings for missing matches or
+  invalid JSON; `block` skips downstream nodes if any configured value is
+  missing or blank. Other independent workflow branches can still run.
+  Invalid regex patterns remain configuration errors.
+- JSON may be fenced in a `json` code block or surrounded by prose.
 
 ### LLM Model Config
 

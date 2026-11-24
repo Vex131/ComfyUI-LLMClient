@@ -31,9 +31,22 @@ def parse_json_output(text: str) -> dict:
     try:
         data = json.loads(candidate)
     except ValueError:
-        raise ExtractError(
-            "Output is not valid JSON. Fix the agent's JSON output, or switch this node to regex mode."
-        )
+        # LLMs sometimes add prose before or after an otherwise valid object.
+        decoder = json.JSONDecoder()
+        data = None
+        match = re.search(r"\{", candidate)
+        if match:
+            try:
+                parsed, _ = decoder.raw_decode(candidate, match.start())
+            except ValueError:
+                pass
+            else:
+                if isinstance(parsed, dict):
+                    data = parsed
+        if data is None:
+            raise ExtractError(
+                "Output is not valid JSON. Fix the agent's JSON output, or switch this node to regex mode."
+            )
     if not isinstance(data, dict):
         raise ExtractError("Expected a top-level JSON object, got {}.".format(type(data).__name__))
     return data
