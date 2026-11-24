@@ -29,7 +29,7 @@ class LLMPatternExtract(io.ComfyNode):
                 io.String.Input(
                     "patterns",
                     multiline=True,
-                    default="positive =\nnegative =",
+                    default="positive_prompt =\nnegative_prompt =",
                     tooltip="One 'label = pattern' per line; socket labels update as you type. "
                             "json mode: pattern = key path (empty = label; use dots for nesting, e.g. "
                             "sampler.name). regex mode: pattern = regex; named group (?P<value>...) or "

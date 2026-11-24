@@ -5,6 +5,68 @@ function getWidget(node, name) {
     return node?.widgets?.find((w) => w.name === name);
 }
 
+// Separate *_input sockets override their matching text widgets. Other string
+// widgets use ComfyUI's normal convert-to-input behavior instead.
+app.registerExtension({
+    name: "LLMClient.ConnectedText",
+    nodeCreated(node) {
+        if (!node.comfyClass?.startsWith("LLM")) return;
+        const fields = (node.inputs || []).flatMap(input => {
+            if (!input.name.endsWith("_input")) return [];
+            const widget = getWidget(node, input.name.slice(0, -6));
+            if (!widget || !widget.element) return [];
+            return [{ input: input.name, widget, hidden: false, saved: null }];
+        });
+        if (!fields.length) return;
+
+        const refresh = (changedInput, connected) => {
+            let changed = false;
+            let restoredHeight = 0;
+            for (const field of fields) {
+                const input = node.inputs?.find(item => item.name === field.input);
+                const hide = changedInput === field.input ? connected : input?.link != null;
+                if (hide === field.hidden) continue;
+                const widget = field.widget;
+                if (hide) {
+                    field.saved = {
+                        type: widget.type, computeSize: widget.computeSize,
+                        display: widget.element.style.display, height: node.size?.[1],
+                    };
+                    widget.type = "hidden";
+                    widget.computeSize = () => [0, -4];
+                    widget.element.style.display = "none";
+                } else if (field.saved) {
+                    widget.type = field.saved.type;
+                    widget.computeSize = field.saved.computeSize;
+                    widget.element.style.display = field.saved.display;
+                    restoredHeight = Math.max(restoredHeight, field.saved.height || 0);
+                    field.saved = null;
+                }
+                field.hidden = hide;
+                changed = true;
+            }
+            if (changed && node.size && node.computeSize && node.setSize) {
+                const size = node.computeSize();
+                node.setSize([Math.max(node.size[0], size[0]), Math.max(size[1], restoredHeight)]);
+            }
+            if (changed) node.setDirtyCanvas?.(true, true);
+        };
+        const previousConnection = node.onConnectionsChange;
+        node.onConnectionsChange = function (type, slot, connected, ...args) {
+            const result = previousConnection?.call(this, type, slot, connected, ...args);
+            if (type === 1) refresh(node.inputs?.[slot]?.name, connected);
+            return result;
+        };
+        const previousConfigure = node.onConfigure;
+        node.onConfigure = function (...args) {
+            const result = previousConfigure?.apply(this, args);
+            setTimeout(refresh, 0);
+            return result;
+        };
+        refresh();
+    },
+});
+
 function setButtonLabel(button, text) {
     button.value = text;
     if (button.options) {
