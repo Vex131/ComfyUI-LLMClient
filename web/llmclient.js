@@ -62,6 +62,36 @@ async function testConnection(node, button, prefix) {
 }
 
 app.registerExtension({
+    name: "LLMClient.AgentWebAccess",
+    nodeCreated(node) {
+        if (node.comfyClass !== "LLMAgentConfig") return;
+        const web = getWidget(node, "web_tool");
+        const local = getWidget(node, "allow_local_web");
+        if (!web || !local) return;
+        const originalType = local.type;
+        const originalSize = local.computeSize;
+        const refresh = () => {
+            local.type = web.value ? originalType : "hidden";
+            local.computeSize = web.value ? originalSize : () => [0, -4];
+            node.setDirtyCanvas?.(true, true);
+        };
+        const callback = web.callback;
+        web.callback = function (...args) {
+            const result = callback?.apply(this, args);
+            refresh();
+            return result;
+        };
+        const configured = node.onConfigure;
+        node.onConfigure = function (...args) {
+            const result = configured?.apply(this, args);
+            refresh();
+            return result;
+        };
+        refresh();
+    },
+});
+
+app.registerExtension({
     name: "LLMClient.Provider",
     nodeCreated(node) {
         if (node.comfyClass !== "LLMProvider") {

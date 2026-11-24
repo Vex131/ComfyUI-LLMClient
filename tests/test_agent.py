@@ -396,6 +396,33 @@ class RunLoopTests(unittest.TestCase):
 
 
 class WebFetchTests(unittest.TestCase):
+    def test_local_access_requires_opt_in_and_preserves_safety_checks(self):
+        hits = []
+        async def handler(request):
+            hits.append(request.path)
+            return web.Response(text="local response")
+        async def redirect(request):
+            raise web.HTTPFound("/page")
+        async def run(session, base):
+            with self.assertRaises(ValueError):
+                await webfetch.fetch_text(session, base + "/page")
+            self.assertEqual(await webfetch.fetch_text(session, base + "/page", allow_local=True),
+                             "local response")
+            localhost = base.replace("127.0.0.1", "localhost")
+            self.assertEqual(await webfetch.fetch_text(session, localhost + "/page",
+                                                       max_chars=5, allow_local=True),
+                             "local\n...[truncated]")
+            for url in ("file:///etc/passwd", base.replace("http://", "http://user:pass@")):
+                with self.assertRaises(ValueError):
+                    await webfetch.fetch_text(session, url, allow_local=True)
+            with self.assertRaisesRegex(RuntimeError, "redirect"):
+                await webfetch.fetch_text(session, base + "/redirect", allow_local=True)
+        app = web.Application()
+        app.router.add_get("/page", handler)
+        app.router.add_get("/redirect", redirect)
+        asyncio.run(_with_server(app, run))
+        self.assertEqual(hits, ["/page", "/page"])
+
     def test_strips_html(self):
         async def handler(request):
             return web.Response(

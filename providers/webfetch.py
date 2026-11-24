@@ -46,7 +46,8 @@ def html_to_text(markup: str) -> str:
     return text.strip()
 
 
-async def fetch_text(session, url: str, max_chars: int = 12000) -> str:
+async def fetch_text(session, url: str, max_chars: int = 12000, *, allow_local=False) -> str:
+    # Keep the session argument for callers; fetches use their own isolated session.
     if not isinstance(url, str):
         raise ValueError("Only public HTTP and HTTPS URLs are allowed.")
     try:
@@ -63,9 +64,9 @@ async def fetch_text(session, url: str, max_chars: int = 12000) -> str:
     except ValueError:
         pass
     else:
-        if not _public_ip(host):
+        if not allow_local and not _public_ip(host):
             raise ValueError("Web fetch only permits public internet addresses.")
-    resolver = PublicResolver()
+    resolver = aiohttp.resolver.DefaultResolver() if allow_local else PublicResolver()
     connector = aiohttp.TCPConnector(resolver=resolver, use_dns_cache=False)
     try:
         async with aiohttp.ClientSession(connector=connector, trust_env=False) as safe_session:

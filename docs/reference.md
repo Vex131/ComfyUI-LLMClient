@@ -64,10 +64,15 @@ Purpose and tools for the LLM Agent.
   then DuckDuckGo as a keyless last resort.
   Blocked engines cool down with exponential backoff, results are cached,
   and when every engine is unavailable the tool returns an actionable
-  message to the model instead of failing the run. `web_fetch` only accesses
-  public addresses and does not follow redirects. Local LLM and configured
-  SearXNG servers are unaffected. See *Credentials*
-  below for the Tavily key.
+   message to the model instead of failing the run. By default `web_fetch` only
+   accesses public addresses and does not follow redirects. Local LLM and configured
+   SearXNG servers are unaffected. See *Credentials*
+   below for the Tavily key.
+- `allow_local_web` — shown when `web_tool` is enabled and off by default.
+  Allows `web_fetch` to access any reachable service on this computer or private
+  networks. Enable only for trusted workflows and networks: model-directed URLs
+  can access local services and send their responses to the configured LLM.
+  Redirects remain blocked, and URL credentials are not accepted.
 - `tool_mode` (advanced) — `auto` uses native OpenAI tool-calling and falls
   back to a JSON text protocol when the server rejects tools. `native`
   requires support (llama.cpp: `--jinja`; vLLM:
@@ -138,7 +143,8 @@ reasoning replay, cache behavior, and statistics.
 ### LLM Unload
 
 `offload_vram_to_ram` / `release_all` / `wake_up`. Support depends on the
-server (matrix below); unsupported servers fail with a clear error.
+server (matrix below); unsupported servers fail with a clear error. Each
+provider request for an unload operation has a 30-second timeout.
 
 Connect LLM Chat's `output` to the optional `text` input, then use LLM
 Unload's `text` output downstream to ensure generation finishes before

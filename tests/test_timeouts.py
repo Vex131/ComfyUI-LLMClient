@@ -67,6 +67,54 @@ def load_nodes():
 
 
 class TimeoutNodeTests(unittest.IsolatedAsyncioTestCase):
+    def test_agent_config_defaults_local_web_off_for_old_calls(self):
+        def field(name, **kwargs):
+            return SimpleNamespace(name=name, **kwargs)
+        io = SimpleNamespace(ComfyNode=object, Schema=lambda **kwargs: SimpleNamespace(**kwargs),
+                             String=SimpleNamespace(Input=field), Combo=SimpleNamespace(Input=field),
+                             Boolean=SimpleNamespace(Input=field), Int=SimpleNamespace(Input=field),
+                             Custom=lambda name: SimpleNamespace(Output=field),
+                             NodeOutput=lambda *values: values)
+        modules = {name: ModuleType(name) for name in
+                   ("cfg_test", "cfg_test.nodes", "cfg_test.nodes.rag", "comfy_api", "comfy_api.latest")}
+        modules["cfg_test.nodes.rag"].LLMRagConfigType = SimpleNamespace(Input=field)
+        modules["comfy_api.latest"].io = io
+        spec = importlib.util.spec_from_file_location(
+            "cfg_test.nodes.agent_config", Path(__file__).resolve().parents[1] / "nodes" / "agent_config.py")
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, modules):
+            spec.loader.exec_module(module)
+        node = module.LLMAgentConfig
+        switch = next(item for item in node.define_schema().inputs if item.name == "allow_local_web")
+        self.assertFalse(switch.default)
+        self.assertTrue(switch.optional)
+        self.assertFalse(node.execute("", "text", "", True, True, "auto", 18)[0]["allow_local_web"])
+        self.assertTrue(node.execute("", "text", "", True, True, "auto", 18,
+                                     allow_local_web=True)[0]["allow_local_web"])
+
+    async def test_agent_local_web_requires_explicit_config(self):
+        nodes = load_nodes()
+        node = nodes["agent"].LLMAgent
+        fetch = nodes["agent"].webfetch.fetch_text = AsyncMock(return_value="page")
+        session = MagicMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        result = {"final": "ok", "reasoning": "", "messages": []}
+        with patch.object(aiohttp, "ClientSession", return_value=session), \
+             patch.object(client, "resolve_key", return_value=""), \
+             patch.object(agent, "run_loop", new_callable=AsyncMock, return_value=result) as loop:
+            for config, expected in ((None, False), ({"web_tool": True}, False),
+                                     ({"web_tool": True, "allow_local_web": True}, True),
+                                     ({"web_tool": True, "allow_local_web": "true"}, False)):
+                await node.execute({"base_url": "http://localhost", "model": "test"},
+                                   "prompt", agent_config=config)
+                tool = loop.call_args.kwargs["tool_impls"]["web_fetch"]
+                self.assertEqual(await tool({"url": "http://localhost"}, session), "page")
+                self.assertIs(fetch.call_args.kwargs["allow_local"], expected)
+            await node.execute({"base_url": "http://localhost", "model": "test"}, "prompt",
+                               agent_config={"web_tool": False, "allow_local_web": True})
+            self.assertNotIn("web_fetch", loop.call_args.kwargs["tool_impls"])
+
     async def test_stats_output_is_appended_to_existing_outputs(self):
         nodes = load_nodes()
         with patch.object(rag, "model_options", return_value=[rag.DIRECT_MODEL]):

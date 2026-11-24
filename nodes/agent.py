@@ -26,6 +26,7 @@ DEFAULT_AGENT_CONFIG = {
     "json_hint": "",
     "assets_tool": True,
     "web_tool": True,
+    "allow_local_web": False,
     "tool_mode": "auto",
     "max_iterations": 18,
 }
@@ -148,7 +149,8 @@ class LLMAgent(io.ComfyNode):
             return assets.get_asset_details(args.get("category", "all"), str(args.get("name", "")))
 
         async def web_tool_impl(args, session):
-            return await webfetch.fetch_text(session, args.get("url", ""))
+            return await webfetch.fetch_text(session, args.get("url", ""),
+                                             allow_local=cfg.get("allow_local_web") is True)
 
         async def web_search_impl(args, session):
             return await websearch.search(session, args.get("query", ""))

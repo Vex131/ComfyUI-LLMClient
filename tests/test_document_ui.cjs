@@ -3,6 +3,27 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
+test("local web access switch follows web tool visibility and retains its value", () => {
+    const extensions = [];
+    const app = { registerExtension: extension => extensions.push(extension) };
+    const source = fs.readFileSync("web/llmclient.js", "utf8").replace(/^import .*;\r?\n/gm, "");
+    vm.runInNewContext(source, { app, api: {}, console });
+    const web = { name: "web_tool", value: false, callback(value) { this.value = value; } };
+    const size = () => [100, 20];
+    const local = { name: "allow_local_web", value: true, type: "toggle", computeSize: size };
+    const node = { comfyClass: "LLMAgentConfig", widgets: [web, local], setDirtyCanvas() {} };
+    extensions.find(e => e.name === "LLMClient.AgentWebAccess").nodeCreated(node);
+    assert.equal(local.type, "hidden");
+    web.callback(true);
+    assert.equal(local.type, "toggle");
+    assert.equal(local.computeSize, size);
+    web.callback(false);
+    assert.equal(local.value, true);
+    web.value = true;
+    node.onConfigure({});
+    assert.equal(local.type, "toggle");
+});
+
 test("free models migrates the old RAM mode", () => {
     const extensions = [];
     const app = { registerExtension: extension => extensions.push(extension) };

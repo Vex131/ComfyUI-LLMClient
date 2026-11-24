@@ -55,13 +55,17 @@ class LLMAgentConfig(io.ComfyNode):
                              tooltip="Maximum model/tool rounds per agent run before requesting a final answer."),
                 LLMRagConfigType.Input("rag_config", optional=True,
                                       tooltip="Connect LLM RAG Config when using documents."),
+                io.Boolean.Input("allow_local_web", display_name="allow local network access",
+                                 default=False, optional=True,
+                                 tooltip="Allow web_fetch to access this computer and private networks. "
+                                         "Enable only for trusted workflows and networks."),
             ],
             outputs=[LLMAgentConfigType.Output("agent_config", tooltip="Connect these instructions and tool settings to LLM Agent.")],
         )
 
     @classmethod
     def execute(cls, system_prompt, output_format, json_hint, assets_tool, web_tool, tool_mode,
-                max_iterations, rag_config=None) -> io.NodeOutput:
+                max_iterations, rag_config=None, allow_local_web=False) -> io.NodeOutput:
         return io.NodeOutput(
             {
                 "system_prompt": system_prompt,
@@ -72,5 +76,6 @@ class LLMAgentConfig(io.ComfyNode):
                 "tool_mode": tool_mode,
                 "max_iterations": max_iterations,
                 "rag_config": rag_config,
+                "allow_local_web": allow_local_web,
             }
         )
