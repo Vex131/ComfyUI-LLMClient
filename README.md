@@ -72,6 +72,7 @@ Responses are available when generation finishes; text is not displayed live.
 | **Load Documents** | Select documents for agent search. |
 | **LLM RAG Config** | Choose the embedding model and search settings. |
 | **LLM Model Config** | Set sampling parameters and request timeout. |
+| **LLM Context Management** | Optionally compact long conversations. |
 | **LLM Pattern Extract** | Extract labeled fields from JSON or text. |
 | **LLM Unload** | Release or load models on supported servers. |
 | **Free ComfyUI Models** | Release ComfyUI-managed models and pass data through. |
@@ -100,16 +101,47 @@ misleading instructions, so use trusted sources and review the results.
 ## Conversation memory
 
 Enable `memory` on Chat or Agent to save and continue conversations. Use the
-session menu to switch, create, or delete sessions. Disabling memory does not
-delete them.
+session menu to switch, create, or delete sessions. A new session is labeled
+**New Session** until it is saved after a run, when its generated name appears.
+Disabling memory does not delete sessions.
 
 Sessions are stored **unencrypted** in `ComfyUI/user/llmclient/sessions` and
 may include prompts, images, tool results, and reasoning. Previous messages are
 sent to the selected provider. Session contents are not saved in workflows,
 but session identifiers are.
 
-Long conversations are not automatically shortened. With a fixed seed,
-ComfyUI may reuse a cached result; use `-1` to force a new run.
+For providers that return reasoning, Chat and Agent preserve it with each
+assistant message and replay it on later requests. If a provider explicitly
+rejects `reasoning_content`, requests are retried without that field; cache
+reuse may be reduced. Older sessions cannot reconstruct missing per-message
+reasoning, so start a new session for the complete history.
+
+Long conversations are not automatically shortened by default. To enable
+compaction, connect **LLM Context Management** to Chat or Agent, enable it,
+and connect **LLM Model Config** with positive `max_context` and
+`max_output_tokens` values. `buffer` accepts a percentage such as `15%` or
+`15`, or a token count above 100 such as `4096`. `keep_recent_tokens` controls
+the approximate amount of recent history to retain alongside the summary.
+
+Compaction is lossy. The original session remains on disk; the request view
+changes when compaction occurs, so the provider may need to rebuild its prompt
+cache. When the provider reports input usage, it is reused as a baseline for
+an unchanged request prefix; otherwise the byte-based estimate is
+conservative. Estimates are not a guarantee of provider acceptance,
+especially for images and tool schemas. If the current
+input is too large, or a summary cannot fit, the node reports an error. With a
+fixed seed, ComfyUI may reuse a cached result; use `-1` to force a new run.
+
+On Windows with Python 3.13.7, the extension applies the targeted CPython
+gh-160429 transport-cleanup backport to the ComfyUI process. It leaves other
+Python versions and already-modified asyncio transports unchanged.
+
+Chat and Agent provide a `stats` text output. Token totals include compaction
+requests, while steps count normal model requests. Input excludes cache reads
+and output excludes reasoning when the provider supplies those breakdowns.
+Unavailable breakdowns and provider prompt-processing speed appear as `N/A`;
+an estimated context size is marked `~`. TPS uses streamed response timing and
+can include network overhead.
 
 ## Unload models
 

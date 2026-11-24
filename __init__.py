@@ -6,6 +6,7 @@ from .nodes.agent import LLMAgent
 from .nodes.agent_config import LLMAgentConfig
 from .nodes.chat import LLMChat
 from .nodes.config import LLMModelConfig
+from .nodes.context import LLMContextManagement
 from .nodes.extract import LLMPatternExtract
 from .nodes.free_models import ComfyFreeModels
 from .nodes.provider import LLMProvider
@@ -18,6 +19,9 @@ WEB_DIRECTORY = "web"
 class LLMClientExtension(ComfyExtension):
     @override
     async def on_load(self) -> None:
+        from .providers.windows_asyncio import install
+
+        install()
         from . import routes
 
     @override
@@ -25,6 +29,7 @@ class LLMClientExtension(ComfyExtension):
         return [
             LLMProvider,
             LLMModelConfig,
+            LLMContextManagement,
             LLMChat,
             LLMAgentConfig,
             LoadDocuments,

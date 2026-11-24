@@ -182,7 +182,12 @@ test("new sessions remain unnamed until saved for chat and agent", async () => {
     let count = 0;
     let saved = [];
     const crypto = { getRandomValues: arr => { arr.fill(++count); return arr; } };
-    const api = { fetchApi: async () => ({ ok: true, json: async () => ({ sessions: saved }) }) };
+    const listeners = new Map();
+    const api = {
+        fetchApi: async () => ({ ok: true, json: async () => ({ sessions: saved }) }),
+        addEventListener: (event, fn) => listeners.set(event, fn),
+        removeEventListener: (event, fn) => { if (listeners.get(event) === fn) listeners.delete(event); },
+    };
     const app = { registerExtension: extension => extensions.push(extension) };
     const source = fs.readFileSync("web/llmclient.js", "utf8").replace(/^import .*;\r?\n/gm, "");
     vm.runInNewContext(source, { app, api, crypto, console, setTimeout });
@@ -202,18 +207,21 @@ test("new sessions remain unnamed until saved for chat and agent", async () => {
         await new Promise(resolve => setTimeout(resolve, 10));
         const menu = node.widgets.find(w => w.name === "session_menu");
         const session = node.widgets.find(w => w.name === "sessions");
-        assert.deepEqual(Array.from(menu.options.values), ["New session..."]);
-        assert.equal(menu.value, "New session...");
+        assert.deepEqual(Array.from(menu.options.values), ["New Session"]);
+        assert.equal(menu.value, "New Session");
         const original = session.value;
-        menu.callback("New session...");
+        menu.callback("New Session");
         await new Promise(resolve => setTimeout(resolve, 10));
         assert.notEqual(session.value, original);
-        assert.deepEqual(Array.from(menu.options.values), ["New session..."]);
+        assert.deepEqual(Array.from(menu.options.values), ["New Session"]);
         saved = [{ id: session.value, created_at: 1700000000, updated_at: 200 }];
-        node.onConfigure({});
+        listeners.get("execution_success")();
         await new Promise(resolve => setTimeout(resolve, 10));
         assert.equal(menu.value, "2023-11-14T22:13:20.000Z");
-        assert.deepEqual(Array.from(menu.options.values), ["New session...", menu.value]);
+        assert.equal(session.value, saved[0].id);
+        assert.deepEqual(Array.from(menu.options.values), ["New Session", menu.value]);
+        node.onRemoved();
+        assert.equal(listeners.size, 0);
     }
 });
 
@@ -257,12 +265,12 @@ test("session menu lists and switches saved sessions", async () => {
     await new Promise(resolve => setTimeout(resolve, 10));
     assert.equal(session.value, current);
     assert.equal(node.widgets.filter(w => w.name === "session_menu").length, 1);
-    assert.equal(select.options.values[0], "New session...");
+    assert.equal(select.options.values[0], "New Session");
     assert.equal(select.options.values[1], "2023-11-14T22:13:20.000Z");
     assert.equal(select.options.values[2], "2023-11-14T22:13:21.000Z");
     select.callback(select.options.values[2]);
     assert.equal(session.value, prior);
-    select.callback("New session...");
+    select.callback("New Session");
     assert.equal(session.value.split(":")[0], owner);
     assert.notEqual(session.value, prior);
 });
@@ -284,6 +292,40 @@ test("model config reorders controls and migrates old saved values", () => {
     node.onConfigure({ widgets_values: [-1, -1, -1, -1, 180], properties: {} });
     assert.equal(widgets.find(w => w.name === "timeout_seconds").value, 180);
     assert.equal(widgets.find(w => w.name === "max_context").value, -1);
+});
+
+test("model config keeps saved timeout when moving it to the bottom", () => {
+    const extensions = [];
+    const app = { registerExtension: extension => extensions.push(extension) };
+    const source = fs.readFileSync("web/llmclient.js", "utf8").replace(/^import .*;\r?\n/gm, "");
+    vm.runInNewContext(source, { app, api: {}, console });
+    const widgets = ["temperature", "top_p", "top_k", "timeout_seconds", "max_output_tokens",
+                     "max_context", "max_tokens"].map(name => ({ name, value: -1 }));
+    const node = { comfyClass: "LLMModelConfig", widgets, properties: {},
+        onConfigure(info) { widgets.forEach((widget, index) => { widget.value = info.widgets_values[index]; }); } };
+    extensions.find(e => e.name === "LLMClient.ModelConfigLayout").nodeCreated(node);
+    assert.equal(widgets.at(-1).name, "timeout_seconds");
+    assert.equal(widgets.find(w => w.name === "max_tokens").type, "hidden");
+    node.onConfigure({ widgets_values: [-1, -1, -1, 8192, 900, 200, 123],
+                       properties: { llmclient_model_config_layout: 2 } });
+    assert.equal(widgets.find(w => w.name === "max_context").value, 8192);
+    assert.equal(widgets.find(w => w.name === "timeout_seconds").value, 900);
+    assert.equal(widgets.find(w => w.name === "max_output_tokens").value, 200);
+    assert.equal(widgets.find(w => w.name === "max_tokens").value, 123);
+    assert.equal(node.properties.llmclient_model_config_layout, 3);
+});
+
+test("new model config leaves output limit at -1", () => {
+    const extensions = [];
+    const app = { registerExtension: extension => extensions.push(extension) };
+    const source = fs.readFileSync("web/llmclient.js", "utf8").replace(/^import .*;\r?\n/gm, "");
+    vm.runInNewContext(source, { app, api: {}, console });
+    const widgets = ["temperature", "top_p", "top_k", "timeout_seconds", "max_output_tokens",
+                     "max_context", "max_tokens"].map(name => ({ name, value: name === "timeout_seconds" ? 300 : -1 }));
+    const node = { comfyClass: "LLMModelConfig", widgets, properties: {} };
+    extensions.find(e => e.name === "LLMClient.ModelConfigLayout").nodeCreated(node);
+    assert.equal(widgets.find(w => w.name === "max_output_tokens").value, -1);
+    assert.equal(widgets.find(w => w.name === "timeout_seconds").value, 300);
 });
 
 test("session menu confirms deletion and replaces only the active session", async () => {
@@ -341,7 +383,7 @@ test("session menu confirms deletion and replaces only the active session", asyn
     await pointer.onClick();
     let menu = document.body.children[0];
     assert.equal(menu.children[0].placeholder, "Filter sessions");
-    assert.equal(menu.children[1].children[0].textContent, "New session...");
+    assert.equal(menu.children[1].children[0].textContent, "New Session");
     assert.equal(menu.children[2].children[0].textContent, "2023-11-14T22:13:20.000Z");
     menu.children[0].value = "22:13:19";
     menu.children[0].oninput();

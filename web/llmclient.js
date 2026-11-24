@@ -175,6 +175,11 @@ app.registerExtension({
     nodeCreated(node) {
         if (node.comfyClass !== "LLMModelConfig") return;
         const widgets = node.widgets || [];
+        const legacyOutput = getWidget(node, "max_tokens");
+        if (legacyOutput && getWidget(node, "max_output_tokens")) {
+            legacyOutput.type = "hidden";
+            legacyOutput.computeSize = () => [0, -4];
+        }
         const context = getWidget(node, "max_context");
         const timeout = getWidget(node, "timeout_seconds");
         const from = widgets.indexOf(context), to = widgets.indexOf(timeout);
@@ -182,22 +187,39 @@ app.registerExtension({
             widgets.splice(from, 1);
             widgets.splice(to, 0, context);
         }
+        const timeoutIndex = widgets.indexOf(timeout);
+        if (timeoutIndex >= 0 && timeoutIndex !== widgets.length - 1) {
+            widgets.splice(timeoutIndex, 1);
+            widgets.push(timeout);
+        }
         const configured = node.onConfigure;
         node.onConfigure = function (info, ...args) {
             const result = configured?.call(this, info, ...args);
-            if (!info?.properties?.llmclient_model_config_layout && Array.isArray(info?.widgets_values)) {
+            const layout = info?.properties?.llmclient_model_config_layout;
+            if (!layout && Array.isArray(info?.widgets_values)) {
                 const named = info.widgets_values_named;
                 const oldTimeout = named?.timeout_seconds ?? info.widgets_values[4];
                 const oldContext = named?.max_context ?? info.widgets_values[5] ?? -1;
                 if (timeout && typeof oldTimeout === "number") timeout.value = oldTimeout;
                 if (context && typeof oldContext === "number") context.value = oldContext;
+            } else if (layout === 2 && Array.isArray(info?.widgets_values)) {
+                const named = info.widgets_values_named;
+                const oldContext = named?.max_context ?? info.widgets_values[3];
+                const oldTimeout = named?.timeout_seconds ?? info.widgets_values[4];
+                const oldOutput = named?.max_output_tokens ?? info.widgets_values[5];
+                const oldLegacyOutput = named?.max_tokens ?? info.widgets_values[6];
+                const output = getWidget(node, "max_output_tokens");
+                if (context && typeof oldContext === "number") context.value = oldContext;
+                if (timeout && typeof oldTimeout === "number") timeout.value = oldTimeout;
+                if (output && typeof oldOutput === "number") output.value = oldOutput;
+                if (legacyOutput && typeof oldLegacyOutput === "number") legacyOutput.value = oldLegacyOutput;
             }
             node.properties ||= {};
-            node.properties.llmclient_model_config_layout = 2;
+            node.properties.llmclient_model_config_layout = 3;
             return result;
         };
         node.properties ||= {};
-        node.properties.llmclient_model_config_layout = 2;
+        node.properties.llmclient_model_config_layout = 3;
     },
 });
 
@@ -225,7 +247,7 @@ app.registerExtension({
                 && getWidget(other, "sessions")?.value?.startsWith(owner + ":"));
             if (duplicate) session.value = randomId() + ":" + randomId();
         };
-        const newSession = "New session...";
+        const newSession = "New Session";
         let entries = [];
         let names = new Map();
         let refreshVersion = 0;
@@ -445,11 +467,15 @@ app.registerExtension({
             setTimeout(update, 0);
             return result;
         };
+        const executionEvents = ["execution_success", "execution_error", "execution_interrupted"];
+        const refreshAfterExecution = () => { if (memory.value) refresh(); };
+        for (const event of executionEvents) api.addEventListener?.(event, refreshAfterExecution);
         const removed = node.onRemoved;
         node.onRemoved = function (...args) {
             ++refreshVersion;
             ++menuVersion;
             closeMenu();
+            for (const event of executionEvents) api.removeEventListener?.(event, refreshAfterExecution);
             return removed?.apply(this, args);
         };
         setTimeout(update, 0);

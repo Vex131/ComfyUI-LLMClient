@@ -6,11 +6,12 @@ import comfy.model_management
 from comfy_api.latest import ComfyAPISync, io
 
 from .. import config
-from ..providers import agent, client, memory as conversation_memory, rag, webfetch, websearch
+from ..providers import agent, client, context, memory as conversation_memory, rag, stats, webfetch, websearch
 from . import assets
 from .agent_config import LLMAgentConfigType
 from .chat import _image_data_url
 from .config import LLMModelConfigType
+from .context import LLMContextManagementType
 from .provider import LLMProviderType
 from .rag import LLMDocumentsType
 
@@ -49,6 +50,7 @@ class LLMAgent(io.ComfyNode):
                                 tooltip="The task for the agent"),
                 LLMModelConfigType.Input("model_config", optional=True,
                                          tooltip="Unconnected = provider defaults"),
+                LLMContextManagementType.Input("context_management", optional=True),
                 io.Image.Input("image", optional=True, tooltip="Optional image for a vision model; only the first image in a batch is used."),
                 LLMDocumentsType.Input("documents", optional=True,
                                        tooltip="Connect a Load Documents node for document search."),
@@ -77,19 +79,22 @@ class LLMAgent(io.ComfyNode):
                     "session",
                     tooltip="Full transcript (JSON): every assistant turn, tool call and tool result",
                 ),
+                io.String.Output("stats", tooltip="Run usage and timing; unavailable metrics are shown as N/A."),
             ],
         )
 
     @classmethod
     async def execute(cls, model, prompt, agent_config=None, model_config=None, reasoning_effort="medium",
                       seed=-1, image=None, vision="auto", memory=False, sessions="",
-                      documents=None) -> io.NodeOutput:
+                      documents=None, context_management=None) -> io.NodeOutput:
+        run_stats = stats.RunStats((model_config or {}).get("max_context", -1),
+                                   context.model_scope(model, reasoning_effort))
         if memory:
             async with conversation_memory.conversation("agent", sessions) as entry:
                 return await cls._execute(model, prompt, agent_config, model_config, reasoning_effort,
-                                          seed, image, vision, entry, documents)
+                                          seed, image, vision, entry, documents, context_management, run_stats)
         return await cls._execute(model, prompt, agent_config, model_config, reasoning_effort,
-                                  seed, image, vision, None, documents)
+                                  seed, image, vision, None, documents, context_management, run_stats)
 
     @classmethod
     def fingerprint_inputs(cls, memory=False, seed=-1, **kwargs):
@@ -97,7 +102,9 @@ class LLMAgent(io.ComfyNode):
 
     @classmethod
     async def _execute(cls, model, prompt, agent_config, model_config, reasoning_effort,
-                       seed, image, vision, entry, documents):
+                       seed, image, vision, entry, documents, context_management=None, run_stats=None):
+        run_stats = run_stats or stats.RunStats((model_config or {}).get("max_context", -1),
+                                               context.model_scope(model, reasoning_effort))
         base_url = model["base_url"]
         api_key = client.resolve_key(base_url)
         model_id = model["model"]
@@ -171,7 +178,7 @@ class LLMAgent(io.ComfyNode):
 
         sampling = dict(model_config) if model_config else {}
         sampling["reasoning_effort"] = (reasoning_effort or "").strip() or "medium"
-        max_tokens = sampling.get("max_tokens", -1)
+        max_tokens = sampling.get("max_output_tokens", sampling.get("max_tokens", -1))
         api = ComfyAPISync()
 
         def on_chunk(text_len):
@@ -180,6 +187,32 @@ class LLMAgent(io.ComfyNode):
 
         timeout = aiohttp.ClientTimeout(total=sampling.get("timeout_seconds", 300))
         async with aiohttp.ClientSession(timeout=timeout) as session:
+            compactor = None
+            prepare_messages = None
+            if context_management and context_management.get("enabled"):
+                compactor = context.Compactor(context_management, sampling,
+                                              entry.get("context_checkpoint") if entry else None,
+                                              entry.get("context_usage_anchor") if entry else None,
+                                              run_stats.model_key)
+
+                async def summarize(summary_messages, allowance, tools):
+                    payload = client.build_chat_payload(model_id, summary_messages, sampling, seed)
+                    payload["max_tokens"] = allowance
+                    if tools:
+                        payload["tools"] = list(tools)
+                        payload["tool_choice"] = "none"
+                    text, _, _ = await agent.chat_turn(
+                        session, base_url, api_key, payload,
+                        should_interrupt=comfy.model_management.processing_interrupted,
+                        stats=run_stats, compaction=True)
+                    comfy.model_management.throw_exception_if_processing_interrupted()
+                    return text
+
+                async def prepare_messages(full_messages, tools):
+                    compactor.anchor = run_stats.last_anchor() or compactor.anchor
+                    return await compactor.prepare(full_messages, summarize, tools)
+
+            options = {"prepare_messages": prepare_messages} if prepare_messages else {}
             result = await agent.run_loop(
                 session, base_url, api_key, model_id, messages,
                 sampling=sampling,
@@ -189,9 +222,14 @@ class LLMAgent(io.ComfyNode):
                 tool_mode=cfg["tool_mode"],
                 on_chunk=on_chunk,
                 should_interrupt=comfy.model_management.processing_interrupted,
+                stats=run_stats,
+                **options,
             )
         comfy.model_management.throw_exception_if_processing_interrupted()
         if entry is not None:
+            if compactor is not None:
+                entry["context_checkpoint"] = compactor.checkpoint
+                entry["context_usage_anchor"] = run_stats.last_anchor()
             conversation_memory.append(entry, result["messages"][current_turn_start:])
             entry.setdefault("runs", []).append({"system_prompt": messages[0]["content"], "model": model_id,
                                                   "reasoning": result["reasoning"], "final": result["final"]})
@@ -199,4 +237,5 @@ class LLMAgent(io.ComfyNode):
             result["final"],
             result["reasoning"],
             json.dumps(result["messages"], indent=2, ensure_ascii=False),
+            run_stats.render(),
         )

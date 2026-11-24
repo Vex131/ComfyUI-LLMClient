@@ -30,10 +30,11 @@ class LLMModelConfig(io.ComfyNode):
                 io.Int.Input("top_k", default=-1, min=-1, max=1000,
                              tooltip="Limit sampling to this many candidate tokens. -1 uses the provider default."),
                 io.Int.Input(
-                    "max_tokens",
+                    "max_output_tokens",
                     default=-1,
                     min=-1,
                     max=1000000,
+                    optional=True,
                     tooltip="Maximum generated tokens per request, not the context window. -1 uses the provider default.",
                 ),
                 io.Int.Input(
@@ -43,10 +44,14 @@ class LLMModelConfig(io.ComfyNode):
                     max=10000000,
                     optional=True,
                     advanced=True,
-                    tooltip="Context-window size in tokens; -1 means unknown. Reserved for future context handling; does not change the provider.",
+                    tooltip="Context-window size in tokens; -1 means unknown. Does not change the provider.",
                 ),
+                io.Int.Input("max_tokens", default=-1, min=-1, max=1000000,
+                             optional=True, advanced=True,
+                             tooltip="Legacy max_tokens input for older workflows; use max_output_tokens."),
                 io.Int.Input(
                     "timeout_seconds",
+                    display_name="timeout",
                     default=300,
                     min=1,
                     max=86400,
@@ -57,13 +62,14 @@ class LLMModelConfig(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, temperature, top_p, top_k, max_tokens, timeout_seconds=300, max_context=-1) -> io.NodeOutput:
+    def execute(cls, temperature, top_p, top_k, max_output_tokens=-1, timeout_seconds=300,
+                max_context=-1, max_tokens=-1) -> io.NodeOutput:
         return io.NodeOutput(
             {
                 "temperature": temperature,
                 "top_p": top_p,
                 "top_k": top_k,
-                "max_tokens": max_tokens,
+                "max_output_tokens": max_output_tokens if max_output_tokens != -1 else max_tokens,
                 "timeout_seconds": timeout_seconds,
                 "max_context": max_context,
             }

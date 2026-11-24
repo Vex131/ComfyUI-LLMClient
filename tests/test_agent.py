@@ -38,6 +38,30 @@ def tool_call_chunks(name, arguments, call_id="call_1", content="working"):
 
 
 class ChatTurnTests(unittest.TestCase):
+    def test_stream_usage_recorded_for_agent(self):
+        from providers.stats import RunStats
+
+        async def handler(request):
+            body = await request.json()
+            self.assertEqual(body["stream_options"], {"include_usage": True})
+            return web.Response(text=sse_body([
+                {"choices": [{"delta": {"content": "ok"}}]},
+                {"choices": [], "usage": {"prompt_tokens": 100, "completion_tokens": 10,
+                                           "prompt_tokens_details": {"cached_tokens": 80},
+                                           "completion_tokens_details": {"reasoning_tokens": 3}}},
+            ]))
+
+        app = web.Application()
+        app.router.add_post("/v1/chat/completions", handler)
+        stats = RunStats(200)
+
+        async def run(session, base):
+            return await agent.chat_turn(session, base, "", {"model": "m", "messages": []}, stats=stats)
+
+        self.assertEqual(asyncio.run(_with_server(app, run))[0], "ok")
+        self.assertIn("Cache Read: 80", stats.render())
+        self.assertIn("Reasoning:  3", stats.render())
+
     def test_content_and_split_tool_calls(self):
         async def handler(request):
             return delta_response([
@@ -162,6 +186,27 @@ class RunLoopTests(unittest.TestCase):
         self.assertEqual(len(tool_msgs), 1)
         self.assertEqual(tool_msgs[0]["content"], "2 loras")
         self.assertEqual(tool_msgs[0]["tool_call_id"], "call_1")
+
+    def test_replays_per_turn_reasoning_with_tool_history(self):
+        bodies = []
+
+        def scripted(body, turn):
+            bodies.append(body)
+            if turn == 0:
+                return delta_response([{"reasoning_content": "first thought"}]
+                                      + tool_call_chunks("list_local_models", "{}"))
+            return delta_response([{"reasoning": "final thought"}, {"content": "done"}])
+
+        async def run(session, base):
+            return await agent.run_loop(session, base, "", "m", [{"role": "user", "content": "list"}],
+                                        tool_impls={"list_local_models": lambda *_: "result"})
+
+        result = asyncio.run(_with_server(self._tool_app(scripted), run))
+        assistant = bodies[1]["messages"][1]
+        self.assertEqual(assistant["reasoning_content"], "first thought")
+        self.assertEqual(assistant["tool_calls"][0]["id"], "call_1")
+        self.assertEqual(bodies[1]["messages"][2]["role"], "tool")
+        self.assertEqual(result["messages"][-1]["reasoning_content"], "final thought")
 
     def test_auto_falls_back_to_react(self):
         def scripted(body, turn):

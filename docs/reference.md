@@ -36,8 +36,11 @@ The reply is available as an output when generation finishes; it is not displaye
   only (`low`, `medium`, `high`, `xhigh`, ...), invalid values are rejected
   by the server.
 - `seed` — `-1` = random.
-- Outputs: `output`, and `reasoning` (thinking trace when the model emits
-  one).
+- `memory` and `sessions` — optionally save and continue a conversation; see
+  [Conversation memory](../README.md#conversation-memory).
+- `context_management` — optional long-conversation compaction settings.
+- Outputs: `output`, `reasoning` (thinking trace when the model emits one),
+  and `stats` (request and token statistics).
 
 ### LLM Agent Config
 
@@ -83,10 +86,13 @@ The final answer is available when the run finishes; text is not displayed live.
   on), `prompt`, optional `model_config`, `image`, `reasoning_effort`, `seed`.
 - `vision` — like LLM Chat, `auto` rejects images for models detected as
   text-only; `enabled` forces it, and `disable` rejects images. Only the first image in a batch is sent.
+- `memory` and `sessions` — optionally save and continue a conversation.
+- `context_management` — optional long-conversation compaction settings.
 - Outputs: `output` (final answer), `reasoning`, and `session` — the full
   transcript (JSON) of every assistant turn, tool call and tool result.
   Wire `output`/`session` to any text viewer. When an image is connected,
-  the session includes its encoded image data.
+  the session includes its encoded image data. `stats` reports request and
+  token statistics.
 
 Example: ask *"write a positive/negative prompt pair for a night cityscape,
 use local LoRAs that fit and include their trigger words"* with
@@ -110,11 +116,24 @@ regex nodes.
 ### LLM Model Config
 
 Optional sampling and request overrides. `-1` = provider default for `temperature`,
-`top_p`, `top_k`, `max_tokens`. `reasoning_effort` lives directly on LLM
+`top_p`, `top_k`, and `max_output_tokens`. The advanced `max_tokens` input
+supports older workflows when `max_output_tokens` is unset. `max_context`
+specifies the context-window size for context management; it does not change
+the provider's configuration. `reasoning_effort` lives directly on LLM
 Chat / LLM Agent instead. `timeout_seconds` defaults to 300 and limits each
 complete model request, including streaming; increase it for slow models.
 For the agent this applies separately to each model turn, not the entire run.
 An unconnected config also uses 300 seconds.
+
+### LLM Context Management
+
+Connect this optional node to Chat or Agent and enable it to compact long
+conversations. `strategy` currently supports `compaction`; `buffer` reserves
+context as a percentage or token count, and `keep_recent_tokens` controls
+the approximate recent history retained with the summary. Compaction requires
+positive `max_context` and `max_output_tokens` in LLM Model Config. See
+[Conversation memory](../README.md#conversation-memory) for limitations,
+reasoning replay, cache behavior, and statistics.
 
 ### LLM Unload
 

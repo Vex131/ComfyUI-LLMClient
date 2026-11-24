@@ -2,7 +2,7 @@ import inspect
 import json
 import re
 
-from .client import _headers, build_chat_payload, normalize_root
+from .client import build_chat_payload, normalize_root, stream_post
 
 TOOL_SCHEMAS = {
     "search_documents": {
@@ -145,13 +145,14 @@ def parse_react(text: str):
 
 
 async def chat_turn(session, base_url: str, api_key: str, payload: dict, on_chunk=None,
-                    should_interrupt=None) -> tuple[str, str, list]:
+                    should_interrupt=None, stats=None, compaction=False) -> tuple[str, str, list]:
     root = normalize_root(base_url)
     text = ""
     reasoning = ""
     calls: dict = {}
-    async with session.post(root + "/chat/completions", json=dict(payload, stream=True),
-                            headers=_headers(api_key), allow_redirects=False) as resp:
+    request = stats.start(payload, compaction) if stats else None
+    on_request = (lambda body: stats.update_payload(request, body)) if stats else None
+    async with stream_post(session, root + "/chat/completions", api_key, payload, bool(stats), on_request) as resp:
         if resp.status in (301, 302, 303, 307, 308):
             raise RuntimeError("HTTP {} redirect from provider not followed for credentialed "
                                "requests".format(resp.status))
@@ -168,6 +169,8 @@ async def chat_turn(session, base_url: str, api_key: str, payload: dict, on_chun
             if data == "[DONE]":
                 break
             chunk = json.loads(data)
+            if stats:
+                stats.chunk(request, chunk)
             choices = chunk.get("choices") or []
             delta = choices[0].get("delta", {}) if choices else {}
             content = delta.get("content")
@@ -187,6 +190,8 @@ async def chat_turn(session, base_url: str, api_key: str, payload: dict, on_chun
                     slot["name"] += fn["name"]
                 if fn.get("arguments"):
                     slot["arguments"] += fn["arguments"]
+    if stats:
+        stats.finish(request)
     return text, reasoning, [calls[i] for i in sorted(calls)]
 
 
@@ -209,7 +214,7 @@ async def _call_tool(impls, name: str, args, session) -> str:
 async def run_loop(session, base_url: str, api_key: str, model: str, messages: list,
                    sampling=None, seed: int = -1, tool_impls=None,
                    max_iterations: int = 8, tool_mode: str = "auto",
-                   on_chunk=None, should_interrupt=None) -> dict:
+                   on_chunk=None, should_interrupt=None, prepare_messages=None, stats=None) -> dict:
     tool_impls = tool_impls or {}
     react = tool_mode == "json" and bool(tool_impls)
     tools = tool_schemas(tool_impls) if (tool_impls and not react) else []
@@ -224,13 +229,15 @@ async def run_loop(session, base_url: str, api_key: str, model: str, messages: l
         iterations = iteration
         if should_interrupt is not None and should_interrupt():
             break
-        payload: dict = dict(build_chat_payload(model, messages, sampling or {}, seed))
+        request_messages = await prepare_messages(messages, tools) if prepare_messages else messages
+        payload: dict = dict(build_chat_payload(model, request_messages, sampling or {}, seed))
         if tools:
             payload["tools"] = list(tools)
             payload["tool_choice"] = "auto"
         try:
             text, reasoning, calls = await chat_turn(session, base_url, api_key, payload,
-                                                     on_chunk=on_chunk, should_interrupt=should_interrupt)
+                                                     on_chunk=on_chunk, should_interrupt=should_interrupt,
+                                                     **({"stats": stats} if stats else {}))
         except RuntimeError as exc:
             if tools and tool_mode == "auto" and not fell_back and "tool" in str(exc).lower():
                 fell_back = True
@@ -242,6 +249,8 @@ async def run_loop(session, base_url: str, api_key: str, model: str, messages: l
         if reasoning:
             reasoning_total += (reasoning_total and "\n" or "") + reasoning
         assistant: dict = {"role": "assistant"}
+        if reasoning:
+            assistant["reasoning_content"] = reasoning
         if text:
             assistant["content"] = text
         elif calls:
@@ -281,16 +290,20 @@ async def run_loop(session, base_url: str, api_key: str, model: str, messages: l
             messages.append({"role": "user",
                              "content": "Iteration budget exhausted. Produce your complete final "
                                         "answer now, without tool calls."})
-            closing = dict(build_chat_payload(model, messages, sampling or {}, seed))
+            request_messages = await prepare_messages(messages, []) if prepare_messages else messages
+            closing = dict(build_chat_payload(model, request_messages, sampling or {}, seed))
             try:
                 text, reasoning, _ = await chat_turn(session, base_url, api_key, closing,
-                                                     on_chunk=on_chunk, should_interrupt=should_interrupt)
+                                                     on_chunk=on_chunk, should_interrupt=should_interrupt,
+                                                     **({"stats": stats} if stats else {}))
             except RuntimeError:
                 text = ""
             else:
                 if reasoning:
                     reasoning_total += (reasoning_total and "\n" or "") + reasoning
                 assistant = {"role": "assistant"}
+                if reasoning:
+                    assistant["reasoning_content"] = reasoning
                 if text:
                     assistant["content"] = text
                 messages.append(assistant)

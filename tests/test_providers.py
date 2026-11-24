@@ -252,6 +252,107 @@ class ResolveKeyTests(unittest.TestCase):
 
 
 class ChatStreamTests(unittest.IsolatedAsyncioTestCase):
+    async def test_provider_rejecting_reasoning_history_retries_without_mutating_transcript(self):
+        from providers.context import usage_anchor
+        from providers.stats import RunStats
+        bodies = []
+        messages = [{"role": "assistant", "content": "answer", "reasoning_content": "thought"},
+                    {"role": "user", "content": "next"}]
+
+        async def handler(request):
+            body = await request.json()
+            bodies.append(body)
+            if "stream_options" in body:
+                return web.json_response({"error": "stream_options not supported"}, status=400)
+            if any("reasoning_content" in m for m in body["messages"]):
+                return web.json_response({"error": "unknown field reasoning_content"}, status=400)
+            chunks = [{"choices": [{"delta": {"content": "ok"}}]},
+                      {"choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": 1}}]
+            return web.Response(text="".join("data: " + json.dumps(c) + "\n\n" for c in chunks)
+                                + "data: [DONE]\n\n", content_type="text/event-stream")
+
+        app = web.Application()
+        app.router.add_post("/v1/chat/completions", handler)
+        stats = RunStats(100, "model-key")
+
+        async def run(session, base):
+            return await client.chat_stream(session, base, "", {"model": "m", "messages": messages},
+                                            lambda _: None, stats=stats)
+
+        self.assertEqual(await _with_server(app, run), ("ok", ""))
+        self.assertEqual(len(bodies), 3)
+        self.assertEqual(messages[0]["reasoning_content"], "thought")
+        self.assertNotIn("reasoning_content", bodies[-1]["messages"][0])
+        self.assertEqual(stats.last_anchor(), usage_anchor(bodies[-1]["messages"], None, "model-key", 12))
+
+    async def test_reasoning_validation_error_is_not_retried(self):
+        bodies = []
+
+        async def handler(request):
+            bodies.append(await request.json())
+            return web.Response(status=400, text="reasoning_content is required")
+
+        app = web.Application()
+        app.router.add_post("/v1/chat/completions", handler)
+
+        async def run(session, base):
+            with self.assertRaisesRegex(RuntimeError, "reasoning_content is required"):
+                await client.chat_stream(session, base, "", {"messages": [
+                    {"role": "assistant", "reasoning_content": "thought"}]}, lambda _: None)
+
+        await _with_server(app, run)
+        self.assertEqual(len(bodies), 1)
+
+    async def test_usage_chunks_are_recorded_without_changing_text(self):
+        from providers.stats import RunStats
+
+        async def handler(request):
+            body = await request.json()
+            self.assertEqual(body["stream_options"], {"include_usage": True})
+            chunks = [
+                {"choices": [{"delta": {"content": "hello"}}]},
+                {"choices": [], "usage": {"prompt_tokens": 20, "completion_tokens": 5,
+                                            "prompt_tokens_details": {"cached_tokens": 15},
+                                            "completion_tokens_details": {"reasoning_tokens": 2}}},
+            ]
+            return web.Response(text="".join("data: " + json.dumps(chunk) + "\n\n" for chunk in chunks)
+                                + "data: [DONE]\n\n", content_type="text/event-stream")
+
+        app = web.Application()
+        app.router.add_post("/v1/chat/completions", handler)
+        stats = RunStats(100)
+
+        async def run(session, base):
+            return await client.chat_stream(session, base, "", {"model": "m", "messages": []},
+                                            lambda _: None, stats=stats)
+
+        self.assertEqual(await _with_server(app, run), ("hello", ""))
+        self.assertIn("Cache Read: 15", stats.render())
+        self.assertIn("Output:     3", stats.render())
+
+    async def test_unsupported_usage_option_retries_without_it(self):
+        from providers.stats import RunStats
+        bodies = []
+
+        async def handler(request):
+            body = await request.json()
+            bodies.append(body)
+            if "stream_options" in body:
+                return web.json_response({"error": "stream_options not supported"}, status=400)
+            return web.Response(text='data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n',
+                                content_type="text/event-stream")
+
+        app = web.Application()
+        app.router.add_post("/v1/chat/completions", handler)
+
+        async def run(session, base):
+            return await client.chat_stream(session, base, "", {"model": "m", "messages": []},
+                                            lambda _: None, stats=RunStats())
+
+        self.assertEqual(await _with_server(app, run), ("ok", ""))
+        self.assertEqual(len(bodies), 2)
+        self.assertNotIn("stream_options", bodies[-1])
+
     async def test_chat_stream_sse(self):
         async def chat_handler(request):
             body = await request.json()

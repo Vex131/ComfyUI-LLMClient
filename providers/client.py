@@ -1,5 +1,6 @@
 import ipaddress
 import json
+from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -142,8 +143,9 @@ def build_chat_payload(model: str, messages: list, sampling: dict = None, seed: 
             payload["top_p"] = sampling["top_p"]
         if sampling.get("top_k", -1) >= 0:
             payload["top_k"] = sampling["top_k"]
-        if sampling.get("max_tokens", -1) >= 0:
-            payload["max_tokens"] = sampling["max_tokens"]
+        max_output = sampling.get("max_output_tokens", sampling.get("max_tokens", -1))
+        if max_output >= 0:
+            payload["max_tokens"] = max_output
         if sampling.get("reasoning_effort"):
             payload["reasoning_effort"] = sampling["reasoning_effort"]
     if seed >= 0:
@@ -151,13 +153,45 @@ def build_chat_payload(model: str, messages: list, sampling: dict = None, seed: 
     return payload
 
 
+@asynccontextmanager
+async def stream_post(session, url, api_key, payload, request_usage=False, on_request=None):
+    body = dict(payload, stream=True)
+    if request_usage:
+        body["stream_options"] = {"include_usage": True}
+    for _ in range(3):
+        if on_request:
+            on_request(body)
+        async with session.post(url, json=body, headers=_headers(api_key), allow_redirects=False) as resp:
+            if resp.status not in (400, 422):
+                yield resp
+                return
+            error = await resp.text()
+            lower = error.lower()
+            unsupported = any(word in lower for word in (
+                "unsupported", "not supported", "unknown", "unexpected", "extra", "unrecognized", "not allowed"))
+            if unsupported and "stream_options" in lower and "stream_options" in body:
+                body.pop("stream_options")
+                continue
+            messages = body.get("messages") or []
+            if (unsupported and "reasoning_content" in lower
+                    and any(isinstance(m, dict) and "reasoning_content" in m for m in messages)):
+                body["messages"] = [
+                    {k: v for k, v in m.items() if k != "reasoning_content"}
+                    if isinstance(m, dict) else m for m in messages
+                ]
+                continue
+            raise RuntimeError("HTTP {} from provider: {}".format(resp.status, error[:500]))
+    raise RuntimeError("Provider rejected supported request compatibility options.")
+
+
 async def chat_stream(session, base_url: str, api_key: str, payload: dict, on_chunk,
-                      should_interrupt=None) -> tuple[str, str]:
+                      should_interrupt=None, stats=None, compaction=False) -> tuple[str, str]:
     root = normalize_root(base_url)
     text = ""
     reasoning = ""
-    async with session.post(root + "/chat/completions", json=dict(payload, stream=True),
-                            headers=_headers(api_key), allow_redirects=False) as resp:
+    request = stats.start(payload, compaction) if stats else None
+    on_request = (lambda body: stats.update_payload(request, body)) if stats else None
+    async with stream_post(session, root + "/chat/completions", api_key, payload, bool(stats), on_request) as resp:
         if resp.status in (301, 302, 303, 307, 308):
             raise RuntimeError("HTTP {} redirect from {} not followed for credentialed requests".format(
                 resp.status, root + "/chat/completions"))
@@ -176,6 +210,8 @@ async def chat_stream(session, base_url: str, api_key: str, payload: dict, on_ch
             if data == "[DONE]":
                 break
             chunk = json.loads(data)
+            if stats:
+                stats.chunk(request, chunk)
             choices = chunk.get("choices") or []
             delta = choices[0].get("delta", {}) if choices else {}
             content = delta.get("content")
@@ -185,6 +221,8 @@ async def chat_stream(session, base_url: str, api_key: str, payload: dict, on_ch
             if thought:
                 reasoning += thought
             on_chunk(len(text))
+    if stats:
+        stats.finish(request)
     return text, reasoning
 
 

@@ -12,7 +12,7 @@ import aiohttp
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from providers import agent, client, memory, rag
+from providers import agent, client, context, memory, rag, stats
 
 
 def load_nodes():
@@ -38,6 +38,8 @@ def load_nodes():
     )
     modules = {name: ModuleType(name) for name in names}
     modules["timeout_test.providers"].client = client
+    modules["timeout_test.providers"].context = context
+    modules["timeout_test.providers"].stats = stats
     modules["timeout_test.providers"].agent = agent
     modules["timeout_test.providers"].rag = rag
     modules["timeout_test.providers"].memory = memory
@@ -55,7 +57,7 @@ def load_nodes():
     root = Path(__file__).resolve().parents[1] / "nodes"
     with patch.dict(sys.modules, modules):
         loaded = {}
-        for name in ("config", "chat", "agent"):
+        for name in ("config", "context", "chat", "agent"):
             spec = importlib.util.spec_from_file_location("timeout_test.nodes." + name, root / (name + ".py"))
             module = importlib.util.module_from_spec(spec)
             sys.modules[spec.name] = module
@@ -65,6 +67,30 @@ def load_nodes():
 
 
 class TimeoutNodeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stats_output_is_appended_to_existing_outputs(self):
+        nodes = load_nodes()
+        with patch.object(rag, "model_options", return_value=[rag.DIRECT_MODEL]):
+            self.assertEqual([o.name for o in nodes["chat"].LLMChat.define_schema().outputs],
+                             ["output", "reasoning", "stats"])
+            self.assertEqual([o.name for o in nodes["agent"].LLMAgent.define_schema().outputs],
+                             ["output", "reasoning", "session", "stats"])
+
+    async def test_model_config_accepts_legacy_output_limit(self):
+        node = load_nodes()["config"].LLMModelConfig
+        legacy = node.execute(-1, -1, -1, max_tokens=512)[0]
+        modern = node.execute(-1, -1, -1, max_output_tokens=256, max_tokens=512)[0]
+        self.assertEqual(legacy["max_output_tokens"], 512)
+        self.assertEqual(modern["max_output_tokens"], 256)
+        self.assertEqual(client.build_chat_payload("m", [], legacy)["max_tokens"], 512)
+
+    async def test_model_config_default_does_not_limit_output(self):
+        node = load_nodes()["config"].LLMModelConfig
+        field = next(field for field in node.define_schema().inputs if field.name == "max_output_tokens")
+        self.assertEqual(field.default, -1)
+        config = node.execute(-1, -1, -1)[0]
+        self.assertEqual(config["max_output_tokens"], -1)
+        self.assertNotIn("max_tokens", client.build_chat_payload("m", [], config))
+
     async def test_blank_reasoning_effort_defaults_to_medium(self):
         nodes = load_nodes()
         model = {"base_url": "http://localhost", "model": "test"}
@@ -143,6 +169,58 @@ class TimeoutNodeTests(unittest.IsolatedAsyncioTestCase):
             messages = loop.call_args.args[4]
             self.assertEqual([m["content"] for m in messages[1:]], ["first", "agent reply", "second"])
 
+    async def test_chat_memory_replays_reasoning_with_its_assistant_turn(self):
+        node = load_nodes()["chat"].LLMChat
+        model = {"base_url": "http://localhost", "model": "test"}
+        session_id = memory.new_session()
+        session = MagicMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(memory, "session_directory", return_value=Path(directory)), \
+             patch.object(aiohttp, "ClientSession", return_value=session), \
+             patch.object(client, "resolve_key", return_value="key"), \
+             patch.object(client, "chat_stream", new_callable=AsyncMock,
+                          side_effect=[("first reply", "first reasoning"), ("second reply", "")]) as stream:
+            await node.execute(model, "", "first", memory=True, sessions=session_id)
+            await node.execute(model, "", "second", memory=True, sessions=session_id)
+            messages = stream.call_args.args[3]["messages"]
+            self.assertEqual(messages[1]["reasoning_content"], "first reasoning")
+            saved = json.loads(memory._session_path("chat", session_id).read_text(encoding="utf8"))
+            self.assertEqual(saved["messages"][1]["reasoning_content"], "first reasoning")
+
+    async def test_chat_compaction_persists_checkpoint_without_losing_history(self):
+        nodes = load_nodes()
+        chat = nodes["chat"].LLMChat
+        model = {"base_url": "http://localhost", "model": "test"}
+        session_id = memory.new_session()
+        session = MagicMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        requests = []
+
+        async def stream(_session, _base, _key, payload, *_args, **_kwargs):
+            requests.append(payload)
+            if "Summarize the earlier conversation" in str(payload["messages"][-1].get("content")):
+                return "summary", ""
+            return "reply " + "y" * 300, ""
+
+        config = {"max_context": 3000, "max_output_tokens": 300}
+        policy = {"enabled": True, "strategy": "compaction", "buffer": "30%",
+                  "keep_recent_tokens": 500}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(memory, "session_directory", return_value=Path(directory)), \
+             patch.object(aiohttp, "ClientSession", return_value=session), \
+             patch.object(client, "resolve_key", return_value="key"), \
+             patch.object(client, "chat_stream", new_callable=AsyncMock, side_effect=stream):
+            for i in range(4):
+                await chat.execute(model, "rules", str(i) + "x" * 300, model_config=config,
+                                   memory=True, sessions=session_id, context_management=policy)
+            saved = json.loads(memory._session_path("chat", session_id).read_text(encoding="utf-8"))
+            self.assertEqual(len(saved["messages"]), 8)
+            self.assertIsNotNone(saved.get("context_checkpoint"))
+            self.assertTrue(any("Summary of earlier conversation" in str(req["messages"]) for req in requests))
+
     async def test_agent_persists_tool_calls_and_results(self):
         nodes = load_nodes()
         model = {"base_url": "http://localhost", "model": "test"}
@@ -175,6 +253,31 @@ class TimeoutNodeTests(unittest.IsolatedAsyncioTestCase):
             saved = json.loads(memory._session_path("agent", session_id).read_text(encoding="utf-8"))
             self.assertEqual(saved["runs"][0]["reasoning"], "thinking")
             self.assertTrue(any(m.get("tool_calls") for m in saved["messages"]))
+
+    async def test_agent_memory_replays_per_turn_reasoning(self):
+        node = load_nodes()["agent"].LLMAgent
+        model = {"base_url": "http://localhost", "model": "test"}
+        session_id = memory.new_session()
+        session = MagicMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        seen = []
+
+        async def fake_loop(*args, **kwargs):
+            messages = list(args[4])
+            seen.append(list(messages))
+            messages.append({"role": "assistant", "content": "answer",
+                             "reasoning_content": "per-turn thought"})
+            return {"final": "answer", "reasoning": "per-turn thought", "messages": messages}
+
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(memory, "session_directory", return_value=Path(directory)), \
+             patch.object(aiohttp, "ClientSession", return_value=session), \
+             patch.object(client, "resolve_key", return_value="key"), \
+             patch.object(agent, "run_loop", new_callable=AsyncMock, side_effect=fake_loop):
+            await node.execute(model, "first", memory=True, sessions=session_id)
+            await node.execute(model, "second", memory=True, sessions=session_id)
+            self.assertEqual(seen[1][-2]["reasoning_content"], "per-turn thought")
 
     async def test_agent_image_input_and_vision_override(self):
         nodes = load_nodes()
@@ -232,13 +335,20 @@ class TimeoutNodeTests(unittest.IsolatedAsyncioTestCase):
 
     def test_config_schema_and_old_execute(self):
         node = load_nodes()["config"].LLMModelConfig
-        self.assertEqual(next(field.default for field in node.define_schema().inputs
-                              if field.name == "timeout_seconds"), 300)
+        fields = node.define_schema().inputs
+        self.assertEqual(fields[-1].name, "timeout_seconds")
+        self.assertEqual(fields[-1].display_name, "timeout")
+        self.assertEqual(fields[-1].default, 300)
         self.assertEqual(node.execute(-1, -1, -1, -1)[0]["timeout_seconds"], 300)
         self.assertEqual(node.execute(-1, -1, -1, -1, 900)[0]["timeout_seconds"], 900)
         configured = node.execute(-1, -1, -1, -1, 900, 8192)[0]
         self.assertEqual(configured["max_context"], 8192)
         self.assertNotIn("max_context", client.build_chat_payload("m", [], configured))
+
+    def test_context_buffer_defaults_to_percentage(self):
+        node = load_nodes()["context"].LLMContextManagement
+        buffer = next(field for field in node.define_schema().inputs if field.name == "buffer")
+        self.assertEqual(buffer.default, "15%")
 
     async def test_streaming_total_timeout_for_chat_and_agent(self):
         async def handler(request):
