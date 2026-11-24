@@ -7,6 +7,7 @@ from .nodes.agent_config import LLMAgentConfig
 from .nodes.chat import LLMChat
 from .nodes.config import LLMModelConfig
 from .nodes.extract import LLMPatternExtract
+from .nodes.free_models import ComfyFreeModels
 from .nodes.provider import LLMProvider
 from .nodes.rag import LoadDocuments, LLMRagConfig
 from .nodes.unload import LLMUnload
@@ -31,6 +32,7 @@ class LLMClientExtension(ComfyExtension):
             LLMAgent,
             LLMPatternExtract,
             LLMUnload,
+            ComfyFreeModels,
         ]
 
 

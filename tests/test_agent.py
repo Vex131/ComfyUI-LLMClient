@@ -1,6 +1,7 @@
 import asyncio
 import json
 import unittest
+from unittest.mock import patch
 
 import aiohttp
 from aiohttp import web
@@ -362,7 +363,8 @@ class WebFetchTests(unittest.TestCase):
 
         app = web.Application()
         app.router.add_get("/page", handler)
-        text = asyncio.run(_with_server(app, run))
+        with patch.object(webfetch, "_public_ip", return_value=True):
+            text = asyncio.run(_with_server(app, run))
         self.assertEqual(text, "Hi there\nSecond para")
 
     def test_rejects_non_http(self):
@@ -382,8 +384,9 @@ class WebFetchTests(unittest.TestCase):
 
         app = web.Application()
         app.router.add_get("/missing", handler)
-        with self.assertRaises(RuntimeError):
-            asyncio.run(_with_server(app, run))
+        with patch.object(webfetch, "_public_ip", return_value=True):
+            with self.assertRaises(RuntimeError):
+                asyncio.run(_with_server(app, run))
 
     def test_truncation(self):
         async def handler(request):
@@ -394,9 +397,48 @@ class WebFetchTests(unittest.TestCase):
 
         app = web.Application()
         app.router.add_get("/big", handler)
-        text = asyncio.run(_with_server(app, run))
+        with patch.object(webfetch, "_public_ip", return_value=True):
+            text = asyncio.run(_with_server(app, run))
         self.assertTrue(text.endswith("[truncated]"))
         self.assertEqual(len(text), len("a" * 100) + len("\n...[truncated]"))
+
+    def test_private_addresses_are_rejected(self):
+        async def run(session, base):
+            for url in (base, "http://localhost/", "http://[::1]/", "http://[::ffff:127.0.0.1]/",
+                        "http://169.254.169.254/", "http://user:pass@example.com/"):
+                with self.subTest(url=url), self.assertRaises(ValueError):
+                    await webfetch.fetch_text(session, url)
+        asyncio.run(_with_server(web.Application(), run))
+
+    def test_redirects_are_not_followed(self):
+        hits = []
+        async def redirect(request):
+            return web.Response(status=302, headers={"Location": "/private"})
+        async def private(request):
+            hits.append(True)
+            return web.Response(text="private")
+        async def run(session, base):
+            with patch.object(webfetch, "_public_ip", return_value=True):
+                with self.assertRaisesRegex(RuntimeError, "redirect"):
+                    await webfetch.fetch_text(session, base + "/redirect")
+        app = web.Application()
+        app.router.add_get("/redirect", redirect)
+        app.router.add_get("/private", private)
+        asyncio.run(_with_server(app, run))
+        self.assertEqual(hits, [])
+
+    def test_dns_rejects_private_and_mixed_addresses(self):
+        async def run():
+            resolver = webfetch.PublicResolver()
+            try:
+                with patch.object(resolver._resolver, "resolve", return_value=[
+                    {"host": "8.8.8.8"}, {"host": "127.0.0.1"}
+                ]):
+                    with self.assertRaisesRegex(ValueError, "public"):
+                        await resolver.resolve("example.com", 80)
+            finally:
+                await resolver.close()
+        asyncio.run(run())
 
 
 if __name__ == "__main__":

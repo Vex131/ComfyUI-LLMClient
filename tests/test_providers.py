@@ -65,6 +65,36 @@ def generic_app():
 
 
 class ProbeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_probe_strata_before_llamacpp(self):
+        app = llamacpp_app()
+
+        async def health(request):
+            return web.json_response({"service": "strata", "loaded": True})
+
+        app.router.add_get("/health", health)
+        async def run(session, base):
+            return await client.probe(session, base, "")
+
+        result = await _with_server(app, run)
+        self.assertEqual(result["profile"], "strata")
+        self.assertEqual(result["context"], 4096)
+
+    async def test_strata_unload_and_wake(self):
+        calls = []
+        app = web.Application()
+        async def control(request):
+            calls.append((request.path, await request.json(), request.headers.get("Authorization")))
+            return web.json_response({"ok": True})
+        app.router.add_post("/unload", control)
+        app.router.add_post("/load", control)
+        async def run(session, base):
+            await client.unload_command(session, base, "secret", "strata", "release_all", "m")
+            await client.unload_command(session, base, "secret", "strata", "wake_up", "m")
+            with self.assertRaisesRegex(ValueError, "cannot offload"):
+                await client.unload_command(session, base, "secret", "strata", "offload_vram_to_ram", "m")
+        await _with_server(app, run)
+        self.assertEqual(calls, [("/unload", {}, "Bearer secret"), ("/load", {}, "Bearer secret")])
+
     async def test_probe_preserves_only_advertised_reasoning_modes(self):
         app = web.Application()
 

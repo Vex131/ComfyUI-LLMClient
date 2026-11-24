@@ -5,7 +5,7 @@ NInfer, Strata, OpenAI, ...): prompt generation and enhancement, image
 captioning and analysis, text extraction — `output` routes to any string
 socket in your graph.
 
-No new dependencies: aiohttp, Pillow, and torch already ship with ComfyUI.
+See the [installation instructions](../README.md#install) for dependencies.
 
 ## Nodes
 
@@ -13,7 +13,7 @@ No new dependencies: aiohttp, Pillow, and torch already ship with ComfyUI.
 
 - `base_url` — OpenAI-compatible API root; `/v1` appended if missing.
 - `model` — combo filled by **Test Connection**. The probe auto-detects the
-  server profile (llama.cpp / vLLM / generic) and caches models, context
+  server profile (Strata / llama.cpp / vLLM / generic) and caches models, context
   size, and vision flags in `providers.json`; also filled on first execution.
   The cache is stored automatically in `llmclient/providers.json` under
   ComfyUI's user directory. An existing cache in the plugin directory is
@@ -26,13 +26,13 @@ No new dependencies: aiohttp, Pillow, and torch already ship with ComfyUI.
 
 ### LLM Chat
 
-Streams the reply.
+The reply is available as an output when generation finishes; it is not displayed live.
 
 - `prompt`, optional `system_prompt`, optional `image`.
-- `vision` — `auto` rejects images for models detected as text-only; `yes`
-  forces it.
+- `vision` — `auto` checks known capabilities, `enabled` forces image input,
+  and `disable` rejects connected images.
 - `model_config` — optional sampling overrides (see LLM Model Config).
-- `reasoning_effort` — empty = provider default; provider-specific levels
+- `reasoning_effort` — empty defaults to `medium`; provider-specific levels
   only (`low`, `medium`, `high`, `xhigh`, ...), invalid values are rejected
   by the server.
 - `seed` — `-1` = random.
@@ -61,7 +61,9 @@ Purpose and tools for the LLM Agent.
   then DuckDuckGo as a keyless last resort.
   Blocked engines cool down with exponential backoff, results are cached,
   and when every engine is unavailable the tool returns an actionable
-  message to the model instead of failing the run. See *Credentials*
+  message to the model instead of failing the run. `web_fetch` only accesses
+  public addresses and does not follow redirects. Local LLM and configured
+  SearXNG servers are unaffected. See *Credentials*
   below for the Tavily key.
 - `tool_mode` (advanced) — `auto` uses native OpenAI tool-calling and falls
   back to a JSON text protocol when the server rejects tools. `native`
@@ -75,12 +77,12 @@ Purpose and tools for the LLM Agent.
 ### LLM Agent
 
 Agentic loop: model → tool calls → results → ... until a final answer.
-Streams each turn; Cancel works like LLM Chat.
+The final answer is available when the run finishes; text is not displayed live.
 
 - `model`, optional `agent_config` (unconnected = generic agent, all tools
   on), `prompt`, optional `model_config`, `image`, `reasoning_effort`, `seed`.
 - `vision` — like LLM Chat, `auto` rejects images for models detected as
-  text-only; `yes` forces it. Only the first image in a batch is sent.
+  text-only; `enabled` forces it, and `disable` rejects images. Only the first image in a batch is sent.
 - Outputs: `output` (final answer), `reasoning`, and `session` — the full
   transcript (JSON) of every assistant turn, tool call and tool result.
   Wire `output`/`session` to any text viewer. When an image is connected,
@@ -131,6 +133,24 @@ unconnected for standalone commands such as `wake_up`.
 |--------|-----------|--------------|
 | vLLM | sleep level 1 (weights to RAM), level 2 (discard), wake | `--enable-sleep-mode` and `VLLM_SERVER_DEV_MODE=1` |
 | llama.cpp | `/models/load`, `/models/unload` | router mode (`--models-dir`) |
+| Strata | `release_all` unloads; `wake_up` loads ahead of a request | A Strata version with `/unload` and `/load`; the next request also loads automatically. `offload_vram_to_ram` is not supported. |
+
+### Free ComfyUI Models
+
+Use this node after image or video generation to request unloading all
+ComfyUI-managed models and clear unused device cache before starting an LLM.
+Connect any data to `anything` and route the `anything` output to the next operation; the
+value and its type are preserved. The `status` output is a string available
+after cleanup. Connect an output to the LLM stage to enforce ordering.
+
+`free_vram` unloads managed models from devices and clears unused device cache.
+`free_vram_and_ram` additionally runs Python garbage collection
+for unreferenced objects. It does not clear workflow caches or guarantee that
+referenced model weights are released from RAM or reloaded from disk.
+
+This does not unload external providers such as Strata, or guarantee release
+of memory held outside ComfyUI's model manager. ComfyUI may reload models
+when a later node needs them.
 
 ## Credentials
 
@@ -174,7 +194,3 @@ can reach it can add or delete vault entries (existing keys are only ever
 read back masked). Do not store keys on a machine whose ComfyUI is
 exposed to an untrusted network (`--listen 0.0.0.0`), and be cautious
 running untrusted workflows on such a machine.
-
-## Roadmap
-
-Planned: RAG over local documents, document/text input nodes.

@@ -3,6 +3,24 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
+test("free models migrates the old RAM mode", () => {
+    const extensions = [];
+    const app = { registerExtension: extension => extensions.push(extension) };
+    const source = fs.readFileSync("web/llmclient.js", "utf8").replace(/^import .*;\r?\n/gm, "");
+    vm.runInNewContext(source, { app, api: {}, console });
+    const mode = { name: "mode", value: "free_vram" };
+    const node = {
+        comfyClass: "LLMFreeComfyModels",
+        widgets: [mode],
+        configure(info) { mode.value = info.value; },
+    };
+    extensions.find(e => e.name === "LLMClient.FreeModels").nodeCreated(node);
+    node.configure({ value: "free_vram_and_ram_experimental" });
+    assert.equal(mode.value, "free_vram_and_ram");
+    node.configure({ value: "free_vram" });
+    assert.equal(mode.value, "free_vram");
+});
+
 test("folder upload and advertised reasoning controls", async () => {
     const extensions = [];
     const listeners = {};

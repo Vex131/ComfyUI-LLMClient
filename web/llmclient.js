@@ -881,6 +881,20 @@ function applyExtractLabels(node) {
 }
 
 app.registerExtension({
+    name: "LLMClient.FreeModels",
+    nodeCreated(node) {
+        if (node.comfyClass !== "LLMFreeComfyModels") return;
+        const configure = node.configure.bind(node);
+        node.configure = function (info) {
+            const result = configure(info);
+            const mode = getWidget(node, "mode");
+            if (mode?.value === "free_vram_and_ram_experimental") mode.value = "free_vram_and_ram";
+            return result;
+        };
+    },
+});
+
+app.registerExtension({
     name: "LLMClient.Vision",
     nodeCreated(node) {
         if (!["LLMChat", "LLMAgent"].includes(node.comfyClass)) return;

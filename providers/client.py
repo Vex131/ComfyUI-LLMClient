@@ -77,7 +77,7 @@ async def _get_json(session, url: str, headers: dict):
             if resp.status != 200:
                 return None
             return await resp.json(content_type=None)
-    except (aiohttp.ClientError, ValueError):
+    except (aiohttp.ClientError, ValueError, TimeoutError):
         return None
 
 
@@ -119,8 +119,13 @@ async def probe(session, base_url: str, api_key: str) -> dict:
 
     profile = "generic"
     context = None
+    health = await _get_json(session, origin + "/health", headers)
     props = await _get_json(session, origin + "/props", headers)
-    if isinstance(props, dict) and ("total_n_ctx" in props or "slot_n_ctx" in props):
+    if isinstance(health, dict) and health.get("service") == "strata":
+        profile = "strata"
+        if isinstance(props, dict):
+            context = props.get("total_n_ctx") or props.get("slot_n_ctx")
+    elif isinstance(props, dict) and ("total_n_ctx" in props or "slot_n_ctx" in props):
         profile = "llamacpp"
         context = props.get("total_n_ctx") or props.get("slot_n_ctx")
     elif isinstance(await _get_json(session, origin + "/is_sleeping", headers), bool):
@@ -199,6 +204,17 @@ async def unload_command(session, base_url: str, api_key: str, profile: str, mod
 
     origin = origin_root(base_url)
     headers = _headers(api_key)
+
+    if capability == "strata":
+        if mode == "offload_vram_to_ram":
+            raise ValueError("Strata cannot offload weights to RAM; use release_all.")
+        if mode == "wake_up":
+            await _post(session, origin + "/load", headers, json_body={})
+            return "Strata model loaded."
+        if mode != "release_all":
+            raise ValueError("Unknown unload mode: {}".format(mode))
+        await _post(session, origin + "/unload", headers, json_body={})
+        return "Strata model unloaded; it will load again on the next request."
 
     if capability == "sleep":
         if mode == "offload_vram_to_ram":
