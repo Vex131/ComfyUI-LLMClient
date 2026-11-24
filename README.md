@@ -139,8 +139,12 @@ Python versions and already-modified asyncio transports unchanged.
 Chat and Agent provide a `stats` text output. Token totals include compaction
 requests, while steps count normal model requests. Input excludes cache reads
 and output excludes reasoning when the provider supplies those breakdowns.
-Unavailable breakdowns and provider prompt-processing speed appear as `N/A`;
-an estimated context size is marked `~`. TPS uses streamed response timing and
+When token breakdowns are unavailable, output and reasoning text token counts
+are estimated from UTF-8 bytes (approximately four bytes per token) and marked
+`~`; these estimates are approximate and omit tool-call tokens, including in
+tool-only turns. Values without
+enough data and provider prompt-processing speed appear as `N/A`; an estimated
+context size is also marked `~`. TPS uses streamed response timing and
 can include network overhead.
 
 ## Unload models

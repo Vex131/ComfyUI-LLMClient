@@ -17,7 +17,8 @@ class RunStats:
 
     def start(self, payload, compaction=False):
         request = {"start": time.monotonic(), "first": None, "end": None, "usage": None,
-                   "timings": None, "compaction": compaction}
+                   "timings": None, "compaction": compaction, "output_bytes": 0,
+                   "reasoning_bytes": 0, "response_seen": False}
         self.update_payload(request, payload)
         self.requests.append(request)
         return request
@@ -34,6 +35,14 @@ class RunStats:
             request["timings"] = chunk["timings"]
         choices = chunk.get("choices") or []
         delta = (choices[0].get("delta") or {}) if choices else {}
+        content = delta.get("content")
+        thought = delta.get("reasoning_content") or delta.get("reasoning")
+        if isinstance(content, str):
+            request["output_bytes"] += len(content.encode("utf-8"))
+        if isinstance(thought, str):
+            request["reasoning_bytes"] += len(thought.encode("utf-8"))
+        if any(delta.get(k) for k in ("content", "reasoning", "reasoning_content", "tool_calls")):
+            request["response_seen"] = True
         if request["first"] is None and any(delta.get(k) for k in
                                             ("content", "reasoning", "reasoning_content", "tool_calls")):
             request["first"] = time.monotonic()
@@ -48,7 +57,6 @@ class RunStats:
             tokens = _number((request.get("usage") or {}).get("prompt_tokens"))
             if request.get("end") is not None and tokens is not None and request.get("anchor"):
                 return dict(request["anchor"], tokens=tokens)
-            return None
         return None
 
     def render(self):
@@ -66,6 +74,7 @@ class RunStats:
                 context += " / N/A"
 
         inputs, outputs, reasoning, cached, total = [], [], [], [], []
+        output_estimated = reasoning_estimated = False
         durations = []
         pp_tokens = pp_seconds = pp_count = 0
         for r in self.requests:
@@ -78,9 +87,21 @@ class RunStats:
                        if isinstance(completion_details, dict) else None)
             cached.append(cache)
             inputs.append(prompt - cache if prompt is not None and cache is not None and cache <= prompt else None)
-            reasoning.append(thought)
-            outputs.append(completion - thought if completion is not None and thought is not None
-                           and thought <= completion else None)
+            valid_thought = thought is not None and (completion is None or thought <= completion)
+            if valid_thought:
+                reasoning.append(thought)
+            elif r["reasoning_bytes"]:
+                reasoning.append((r["reasoning_bytes"] + 3) // 4)
+                reasoning_estimated = True
+            else:
+                reasoning.append(None)
+            if completion is not None and valid_thought:
+                outputs.append(completion - thought)
+            elif r["response_seen"]:
+                outputs.append((r["output_bytes"] + 3) // 4)
+                output_estimated = True
+            else:
+                outputs.append(None)
             total.append(prompt + completion if prompt is not None and completion is not None else None)
             if completion is not None and r["first"] is not None and r["end"] is not None:
                 durations.append((completion, r["end"] - r["first"]))
@@ -94,8 +115,8 @@ class RunStats:
         def summation(values):
             return sum(values) if values and all(v is not None for v in values) else None
 
-        def display(value):
-            return "{:,}".format(value) if value is not None else "N/A"
+        def display(value, estimated=False):
+            return ("~" if estimated else "") + "{:,}".format(value) if value is not None else "N/A"
 
         input_total, cache_total = summation(inputs), summation(cached)
         rate = ("{:.1f}%".format(100 * cache_total / (input_total + cache_total))
@@ -111,8 +132,8 @@ class RunStats:
         runtime = "{:02d}:{:02d}:{:02d}".format(elapsed // 3600, elapsed // 60 % 60, elapsed % 60)
         return "\n".join([
             "Context:    " + context, "Steps:      " + str(len(normal)),
-            "Input:      " + display(input_total), "Output:     " + display(summation(outputs)),
-            "Reasoning:  " + display(summation(reasoning)), "Cache Read: " + display(cache_total),
+            "Input:      " + display(input_total), "Output:     " + display(summation(outputs), output_estimated),
+            "Reasoning:  " + display(summation(reasoning), reasoning_estimated), "Cache Read: " + display(cache_total),
             "Cache Rate: " + rate, "Total:      " + display(summation(total)), "",
             "TPS:        " + tps, "PP:         " + pp, "TTFT:       " + ttft,
             "Run Time:   " + runtime,
