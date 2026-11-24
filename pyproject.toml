@@ -5,6 +5,8 @@ version = "0.2.0"
 license = { text = "MIT" }
 dependencies = [
     "filelock>=3.13",
+    "aiohttp>=3.9",
+    "numpy",
     "sentence-transformers>=3.4,<6",
     "pypdf>=5,<7",
     "python-docx>=1.1,<2",

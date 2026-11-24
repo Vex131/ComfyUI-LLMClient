@@ -94,7 +94,7 @@ async def probe(session, base_url: str, api_key: str) -> dict:
             if resp.status != 200:
                 return {"ok": False, "profile": "generic", "models": [], "context": None,
                         "error": "GET {}/models returned HTTP {}".format(root, resp.status)}
-            data = await resp.json()
+            data = await resp.json(content_type=None)
     except (aiohttp.ClientError, ValueError) as exc:
         return {"ok": False, "profile": "generic", "models": [], "context": None, "error": str(exc)}
 
@@ -158,7 +158,7 @@ async def stream_post(session, url, api_key, payload, request_usage=False, on_re
     body = dict(payload, stream=True)
     if request_usage:
         body["stream_options"] = {"include_usage": True}
-    for _ in range(3):
+    for _ in range(4):
         if on_request:
             on_request(body)
         async with session.post(url, json=body, headers=_headers(api_key), allow_redirects=False) as resp:
@@ -171,6 +171,9 @@ async def stream_post(session, url, api_key, payload, request_usage=False, on_re
                 "unsupported", "not supported", "unknown", "unexpected", "extra", "unrecognized", "not allowed"))
             if unsupported and "stream_options" in lower and "stream_options" in body:
                 body.pop("stream_options")
+                continue
+            if unsupported and "reasoning_effort" in lower and "reasoning_effort" in body:
+                body.pop("reasoning_effort")
                 continue
             messages = body.get("messages") or []
             if (unsupported and "reasoning_content" in lower

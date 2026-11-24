@@ -15,6 +15,20 @@ class FakeModel:
 
 
 class DocumentSearchTests(unittest.TestCase):
+    def test_vector_search_filters_nonfinite_and_keeps_tie_order(self):
+        class Model:
+            def encode(self, texts, **kwargs):
+                if len(texts) == 1 and texts[0] == "query":
+                    return [[1.0, 0.0]]
+                return [[1.0, 0.0], [float("nan"), 0.0], [1.0, 0.0]]
+        with tempfile.TemporaryDirectory() as directory:
+            for name in ("a", "b", "c"):
+                Path(directory, name + ".txt").write_text(name, encoding="utf-8")
+            index = rag.DocumentIndex(directory, "", model=Model())
+            result = index.search("query")
+            self.assertNotIn("b.txt", result)
+            self.assertLess(result.index("c.txt"), result.index("a.txt"))
+
     def test_search_ranks_sources_and_handles_empty_query(self):
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, "one.txt").write_text("Apple trees grow fruit.", encoding="utf-8")

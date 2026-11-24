@@ -90,6 +90,7 @@ class UnloadTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(mode=mode):
                 result = await self.module.LLMUnload.execute(self.model, mode)
                 self.assertEqual(result, ("unloaded", ""))
+                self.assertEqual(self.module.aiohttp.ClientSession.call_args.kwargs["timeout"].total, 30)
 
     async def test_failure_does_not_return_passthrough(self):
         self.client.unload_command.side_effect = RuntimeError("unload failed")

@@ -65,6 +65,17 @@ def generic_app():
 
 
 class ProbeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_probe_accepts_json_with_nonstandard_content_type(self):
+        app = web.Application()
+        async def models_handler(request):
+            return web.Response(text='{"data":[{"id":"model"}]}', content_type="text/plain")
+        app.router.add_get("/v1/models", models_handler)
+        async def run(session, base):
+            return await client.probe(session, base, "")
+        result = await _with_server(app, run)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["models"][0]["id"], "model")
+
     async def test_probe_strata_before_llamacpp(self):
         app = llamacpp_app()
 
@@ -252,6 +263,43 @@ class ResolveKeyTests(unittest.TestCase):
 
 
 class ChatStreamTests(unittest.IsolatedAsyncioTestCase):
+    async def test_all_three_unsupported_fields_are_retried(self):
+        from providers.stats import RunStats
+        bodies = []
+        async def handler(request):
+            body = await request.json()
+            bodies.append(body)
+            for field in ("stream_options", "reasoning_effort"):
+                if field in body:
+                    return web.json_response({"error": "unknown field " + field}, status=422)
+            if "reasoning_content" in body["messages"][0]:
+                return web.json_response({"error": "unknown field reasoning_content"}, status=400)
+            return web.Response(text='data: [DONE]\n\n', content_type="text/event-stream")
+        app = web.Application()
+        app.router.add_post("/v1/chat/completions", handler)
+        payload = {"messages": [{"role": "assistant", "reasoning_content": "thought"}],
+                   "reasoning_effort": "medium"}
+        async def run(session, base):
+            return await client.chat_stream(session, base, "", payload, lambda _: None, stats=RunStats())
+        self.assertEqual(await _with_server(app, run), ("", ""))
+        self.assertEqual(len(bodies), 4)
+        self.assertNotIn("reasoning_effort", bodies[-1])
+        self.assertEqual(payload["reasoning_effort"], "medium")
+        self.assertEqual(payload["messages"][0]["reasoning_content"], "thought")
+
+    async def test_reasoning_effort_validation_error_is_not_retried(self):
+        calls = []
+        async def handler(request):
+            calls.append(await request.json())
+            return web.Response(status=400, text="reasoning_effort is required")
+        app = web.Application()
+        app.router.add_post("/v1/chat/completions", handler)
+        async def run(session, base):
+            with self.assertRaisesRegex(RuntimeError, "reasoning_effort is required"):
+                await client.chat_stream(session, base, "", {"reasoning_effort": "medium"}, lambda _: None)
+        await _with_server(app, run)
+        self.assertEqual(len(calls), 1)
+
     async def test_provider_rejecting_reasoning_history_retries_without_mutating_transcript(self):
         from providers.context import usage_anchor
         from providers.stats import RunStats

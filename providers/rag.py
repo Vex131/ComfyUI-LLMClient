@@ -1,5 +1,4 @@
 """Local document ingestion and semantic retrieval for the agent."""
-import math
 import hashlib
 import threading
 from collections import OrderedDict
@@ -226,17 +225,18 @@ class DocumentIndex:
             model = SentenceTransformer(str(Path(model_path).expanduser()), device="cpu",
                                         local_files_only=True, trust_remote_code=False)
         self.model = model
-        self.vectors = model.encode([c[2] for c in self.chunks], normalize_embeddings=True,
-                                    show_progress_bar=False)
+        import numpy as np
+        self.vectors = np.asarray(model.encode([c[2] for c in self.chunks], normalize_embeddings=True,
+                                               show_progress_bar=False))
 
     def search(self, query, top_k=5):
         if not isinstance(query, str) or not query.strip():
             return "Provide a non-empty search query."
-        vector = self.model.encode([query], normalize_embeddings=True, show_progress_bar=False)[0]
+        import numpy as np
+        vector = np.asarray(self.model.encode([query], normalize_embeddings=True, show_progress_bar=False)[0])
         scored = []
-        for index, embedding in enumerate(self.vectors):
-            score = sum(float(a) * float(b) for a, b in zip(vector, embedding))
-            if math.isfinite(score):
+        for index, score in enumerate(self.vectors @ vector):
+            if np.isfinite(score):
                 scored.append((score, index))
         scored.sort(reverse=True)
         results = []
